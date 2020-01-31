@@ -38,9 +38,7 @@
 #ifdef RENDER
 #include "picturestr.h"
 #endif
-#ifdef RANDR
 #include "randrstr.h"
-#endif
 
 #define DBGPRINT(x) //(fprintf x)
 
@@ -79,11 +77,9 @@ typedef struct _vncHooksScreenRec {
   TriFanProcPtr                TriFan;
 #endif
 #endif
-#ifdef RANDR
   RRSetConfigProcPtr           rrSetConfig;
   RRScreenSetSizeProcPtr       rrScreenSetSize;
   RRCrtcSetProcPtr             rrCrtcSet;
-#endif
 } vncHooksScreenRec, *vncHooksScreenPtr;
 
 typedef struct _vncHooksGCRec {
@@ -174,7 +170,6 @@ static void vncHooksTriFan(CARD8 op, PicturePtr pSrc, PicturePtr pDst,
             int npoint, xPointFixed * points);
 #endif
 #endif
-#ifdef RANDR
 static Bool vncHooksRandRSetConfig(ScreenPtr pScreen, Rotation rotation,
                                    int rate, RRScreenSizePtr pSize);
 static Bool vncHooksRandRScreenSetSize(ScreenPtr pScreen,
@@ -184,7 +179,6 @@ static Bool vncHooksRandRCrtcSet(ScreenPtr pScreen, RRCrtcPtr crtc,
                                  RRModePtr mode, int x, int y,
                                  Rotation rotation, int numOutputs,
                                  RROutputPtr *outputs);
-#endif
 
 // GC "funcs"
 
@@ -277,9 +271,7 @@ int vncHooksInit(int scrIdx)
 #ifdef RENDER
   PictureScreenPtr ps;
 #endif
-#ifdef RANDR
   rrScrPrivPtr rp;
-#endif
 
   pScreen = screenInfo.screens[scrIdx];
 
@@ -339,7 +331,6 @@ int vncHooksInit(int scrIdx)
 #endif
   }
 #endif
-#ifdef RANDR
   rp = rrGetScrPriv(pScreen);
   if (rp) {
     /* Some RandR callbacks are optional */
@@ -350,7 +341,6 @@ int vncHooksInit(int scrIdx)
     if (rp->rrCrtcSet)
       wrap(vncHooksScreen, rp, rrCrtcSet, vncHooksRandRCrtcSet);
   }
-#endif
 
   return TRUE;
 }
@@ -473,9 +463,7 @@ static Bool vncHooksCloseScreen(ScreenPtr pScreen_)
 #ifdef RENDER
   PictureScreenPtr ps;
 #endif
-#ifdef RANDR
   rrScrPrivPtr rp;
-#endif
 
   SCREEN_PROLOGUE(pScreen_, CloseScreen);
 
@@ -501,14 +489,12 @@ static Bool vncHooksCloseScreen(ScreenPtr pScreen_)
 #endif
   }
 #endif
-#ifdef RANDR
   rp = rrGetScrPriv(pScreen);
   if (rp) {
     unwrap(vncHooksScreen, rp, rrSetConfig);
     unwrap(vncHooksScreen, rp, rrScreenSetSize);
     unwrap(vncHooksScreen, rp, rrCrtcSet);
   }
-#endif
 
   DBGPRINT((stderr,"vncHooksCloseScreen: unwrapped screen functions\n"));
 
@@ -829,20 +815,6 @@ static void vncHooksComposite(CARD8 op, PicturePtr pSrc, PicturePtr pMask,
   RENDER_EPILOGUE(Composite);
 }
 
-static int
-GlyphCount(int nlist, GlyphListPtr list, GlyphPtr * glyphs)
-{
-  int count;
-
-  count = 0;
-  while (nlist--) {
-    count += list->len;
-    list++;
-  }
-
-  return count;
-}
-
 static RegionPtr
 GlyphsToRegion(ScreenPtr pScreen, int nlist, GlyphListPtr list, GlyphPtr *glyphs)
 {
@@ -850,7 +822,7 @@ GlyphsToRegion(ScreenPtr pScreen, int nlist, GlyphListPtr list, GlyphPtr *glyphs
   GlyphPtr glyph;
   int x, y;
 
-  int nrects = GlyphCount(nlist, list, glyphs);
+  int nrects = nlist;
   xRectangle rects[nrects];
   xRectanglePtr rect;
 
@@ -858,20 +830,48 @@ GlyphsToRegion(ScreenPtr pScreen, int nlist, GlyphListPtr list, GlyphPtr *glyphs
   y = 0;
   rect = &rects[0];
   while (nlist--) {
+    int left, right, top, bottom;
+
     x += list->xOff;
     y += list->yOff;
     n = list->len;
     list++;
+
+    left = INT_MAX;
+    top = INT_MAX;
+    right = -INT_MAX;
+    bottom = -INT_MAX;
     while (n--) {
+      int gx, gy, gw, gh;
+
       glyph = *glyphs++;
-      rect->x = x - glyph->info.x;
-      rect->y = y - glyph->info.y;
-      rect->width = glyph->info.width;
-      rect->height = glyph->info.height;
+      gx = x - glyph->info.x;
+      gy = y - glyph->info.y;
+      gw = glyph->info.width;
+      gh = glyph->info.height;
       x += glyph->info.xOff;
       y += glyph->info.yOff;
-      rect++;
+
+      if (gx < left)
+        left = gx;
+      if (gy < top)
+        top = gy;
+      if (gx + gw > right)
+        right = gx + gw;
+      if (gy + gh > bottom)
+        bottom = gy + gh;
     }
+
+    rect->x = left;
+    rect->y = top;
+    if ((right > left) && (bottom > top)) {
+      rect->width = right - left;
+      rect->height = bottom - top;
+    } else {
+      rect->width = 0;
+      rect->height = 0;
+    }
+    rect++;
   }
 
   return RECTS_TO_REGION(pScreen, nrects, rects, CT_NONE);
@@ -1199,8 +1199,6 @@ static void vncHooksTriFan(CARD8 op, PicturePtr pSrc, PicturePtr pDst,
 
 #endif /* RENDER */
 
-#ifdef RANDR
-
 // Unwrap and rewrap helpers
 
 #define RANDR_PROLOGUE(field)                                             \
@@ -1274,8 +1272,6 @@ static Bool vncHooksRandRCrtcSet(ScreenPtr pScreen, RRCrtcPtr crtc,
 
   return TRUE;
 }
-
-#endif /* RANDR */
 
 /////////////////////////////////////////////////////////////////////////////
 //

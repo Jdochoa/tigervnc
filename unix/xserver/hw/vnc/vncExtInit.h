@@ -1,5 +1,5 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
- * Copyright 2011-2015 Pierre Ossman for Cendio AB
+ * Copyright 2011-2019 Pierre Ossman for Cendio AB
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,13 +23,6 @@
 #include <stddef.h>
 #include <sys/select.h>
 
-// Only from C++
-#ifdef __cplusplus
-namespace rfb { class StringParameter; };
-
-extern rfb::StringParameter httpDir;
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -48,6 +41,7 @@ extern int vncFbstride[];
 extern int vncInetdSock;
 
 void vncExtensionInit(void);
+void vncExtensionClose(void);
 
 void vncHandleSocketEvent(int fd, int scrIdx, int read, int write);
 void vncCallBlockHandlers(int* timeout);
@@ -59,7 +53,9 @@ int vncGetSendPrimary(void);
 
 void vncUpdateDesktopName(void);
 
-void vncServerCutText(const char *text, size_t len);
+void vncRequestClipboard(void);
+void vncAnnounceClipboard(int available);
+void vncSendClipboardData(const char* data);
 
 int vncConnectClient(const char *addr);
 

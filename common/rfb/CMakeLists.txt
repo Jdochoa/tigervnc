@@ -2,6 +2,7 @@ include_directories(${CMAKE_SOURCE_DIR}/common ${JPEG_INCLUDE_DIR})
 
 set(RFB_SOURCES
   Blacklist.cxx
+  Congestion.cxx
   CConnection.cxx
   CMsgHandler.cxx
   CMsgReader.cxx
@@ -10,9 +11,9 @@ set(RFB_SOURCES
   CSecurityStack.cxx
   CSecurityVeNCrypt.cxx
   CSecurityVncAuth.cxx
+  ClientParams.cxx
   ComparingUpdateTracker.cxx
   Configuration.cxx
-  ConnParams.cxx
   CopyRectDecoder.cxx
   Cursor.cxx
   DecodeManager.cxx
@@ -20,7 +21,6 @@ set(RFB_SOURCES
   d3des.c
   EncodeManager.cxx
   Encoder.cxx
-  HTTPServer.cxx
   HextileDecoder.cxx
   HextileEncoder.cxx
   JpegCompressor.cxx
@@ -43,6 +43,7 @@ set(RFB_SOURCES
   SMsgReader.cxx
   SMsgWriter.cxx
   ServerCore.cxx
+  ServerParams.cxx
   Security.cxx
   SecurityServer.cxx
   SecurityClient.cxx

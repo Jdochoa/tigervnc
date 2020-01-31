@@ -1,5 +1,5 @@
 /* Copyright 2015 Pierre Ossman for Cendio AB
- * Copyright 2016 Brian P. Hinz
+ * Copyright 2016-2019 Brian P. Hinz
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -107,32 +107,34 @@ public class DecodeManager {
     if (threads.size() == 1) {
       bufferStream = freeBuffers.getFirst();
       bufferStream.clear();
-      decoder.readRect(r, conn.getInStream(), conn.cp, bufferStream);
+      decoder.readRect(r, conn.getInStream(), conn.server, bufferStream);
       decoder.decodeRect(r, (Object)bufferStream.data(), bufferStream.length(),
-                         conn.cp, pb);
+                         conn.server, pb);
       return;
     }
 
     // Wait for an available memory buffer
     queueMutex.lock();
 
-    while (freeBuffers.isEmpty())
-      try {
-      producerCond.await();
-      } catch (InterruptedException e) { }
+    try {
+      while (freeBuffers.isEmpty())
+        try {
+        producerCond.await();
+        } catch (InterruptedException e) { }
 
-    // Don't pop the buffer in case we throw an exception
-    // whilst reading
-    bufferStream = freeBuffers.getFirst();
-
-    queueMutex.unlock();
+      // Don't pop the buffer in case we throw an exception
+      // whilst reading
+      bufferStream = freeBuffers.getFirst();
+    } finally {
+      queueMutex.unlock();
+    }
 
     // First check if any thread has encountered a problem
     throwThreadException();
 
     // Read the rect
     bufferStream.clear();
-    decoder.readRect(r, conn.getInStream(), conn.cp, bufferStream);
+    decoder.readRect(r, conn.getInStream(), conn.server, bufferStream);
 
     // Then try to put it on the queue
     entry = new QueueEntry();
@@ -141,39 +143,43 @@ public class DecodeManager {
     entry.rect = r;
     entry.encoding = encoding;
     entry.decoder = decoder;
-    entry.cp = conn.cp;
+    entry.server = conn.server;
     entry.pb = pb;
     entry.bufferStream = bufferStream;
 
     decoder.getAffectedRegion(r, bufferStream.data(),
-                              bufferStream.length(), conn.cp,
+                              bufferStream.length(), conn.server,
                               entry.affectedRegion);
 
     queueMutex.lock();
 
-    // The workers add buffers to the end so it's safe to assume
-    // the front is still the same buffer
-    freeBuffers.removeFirst();
+    try {
+      // The workers add buffers to the end so it's safe to assume
+      // the front is still the same buffer
+      freeBuffers.removeFirst();
 
-    workQueue.addLast(entry);
+      workQueue.addLast(entry);
 
-    // We only put a single entry on the queue so waking a single
-    // thread is sufficient
-    consumerCond.signal();
-
-    queueMutex.unlock();
+      // We only put a single entry on the queue so waking a single
+      // thread is sufficient
+      consumerCond.signal();
+    } finally {
+      queueMutex.unlock();
+    }
   }
 
   public void flush()
   {
     queueMutex.lock();
 
-    while (!workQueue.isEmpty())
-      try {
-      producerCond.await();
-      } catch (InterruptedException e) { }
-
-    queueMutex.unlock();
+    try {
+      while (!workQueue.isEmpty())
+        try {
+        producerCond.await();
+        } catch (InterruptedException e) { }
+    } finally {
+      queueMutex.unlock();
+    }
 
     throwThreadException();
   }
@@ -183,11 +189,15 @@ public class DecodeManager {
     //os::AutoMutex a(queueMutex);
     queueMutex.lock();
 
-    if (threadException != null)
-      return;
+    try {
+      if (threadException != null)
+        return;
 
-    threadException =
-      new Exception("Exception on worker thread: "+e.getMessage());
+      threadException =
+        new Exception("Exception on worker thread: "+e.getMessage());
+    } finally {
+      queueMutex.unlock();
+    }
   }
 
   private void throwThreadException()
@@ -195,14 +205,18 @@ public class DecodeManager {
     //os::AutoMutex a(queueMutex);
     queueMutex.lock();
 
-    if (threadException == null)
-      return;
+    try {
+      if (threadException == null)
+        return;
 
-    Exception e = new Exception(threadException.getMessage());
+      Exception e = new Exception(threadException.getMessage());
 
-    threadException = null;
+      threadException = null;
 
-    throw e;
+      throw e;
+    } finally {
+      queueMutex.unlock();
+    }
   }
 
   private class QueueEntry {
@@ -214,7 +228,7 @@ public class DecodeManager {
     public Rect rect;
     public int encoding;
     public Decoder decoder;
-    public ConnParams cp;
+    public ServerParams server;
     public ModifiablePixelBuffer pb;
     public MemOutStream bufferStream;
     public Region affectedRegion;
@@ -236,13 +250,17 @@ public class DecodeManager {
       //os::AutoMutex a(manager.queueMutex);
       manager.queueMutex.lock();
 
-      if (!thread.isAlive())
-        return;
+      try {
+        if (!thread.isAlive())
+          return;
 
-      stopRequested = true;
+        stopRequested = true;
 
-      // We can't wake just this thread, so wake everyone
-      manager.consumerCond.signalAll();
+        // We can't wake just this thread, so wake everyone
+        manager.consumerCond.signalAll();
+      } finally {
+        manager.queueMutex.unlock();
+      }
     }
 
     public void run()
@@ -271,7 +289,7 @@ public class DecodeManager {
         try {
           entry.decoder.decodeRect(entry.rect, entry.bufferStream.data(),
                                    entry.bufferStream.length(),
-                                   entry.cp, entry.pb);
+                                   entry.server, entry.pb);
         } catch (com.tigervnc.rdr.Exception e) {
           manager.setThreadException(e);
         } catch(java.lang.Exception e) {
@@ -345,7 +363,7 @@ public class DecodeManager {
                                               entry2.rect,
                                               entry2.bufferStream.data(),
                                               entry2.bufferStream.length(),
-                                              entry.cp))
+                                              entry.server))
               lockedRegion.assign_union(entry.affectedRegion);
               continue next;
           }

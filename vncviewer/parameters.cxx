@@ -55,6 +55,10 @@ static LogWriter vlog("Parameters");
 IntParameter pointerEventInterval("PointerEventInterval",
                                   "Time in milliseconds to rate-limit"
                                   " successive pointer events", 17);
+BoolParameter emulateMiddleButton("EmulateMiddleButton",
+                                  "Emulate middle mouse button by pressing "
+                                  "left and right mouse buttons simultaneously",
+                                  false);
 BoolParameter dotWhenNoCursor("DotWhenNoCursor",
                               "Show the dot cursor when the server sends an "
                               "invisible cursor", false);
@@ -76,8 +80,7 @@ BoolParameter fullColour("FullColor",
 AliasParameter fullColourAlias("FullColour", "Alias for FullColor", &fullColour);
 IntParameter lowColourLevel("LowColorLevel",
                             "Color level to use on slow connections. "
-                            "0 = Very Low (8 colors), 1 = Low (64 colors), "
-                            "2 = Medium (256 colors)", 2);
+                            "0 = Very Low, 1 = Low, 2 = Medium", 2);
 AliasParameter lowColourLevelAlias("LowColourLevel", "Alias for LowColorLevel", &lowColourLevel);
 StringParameter preferredEncoding("PreferredEncoding",
                                   "Preferred encoding to use (Tight, ZRLE, Hextile or"
@@ -86,7 +89,7 @@ BoolParameter customCompressLevel("CustomCompressLevel",
                                   "Use custom compression level. "
                                   "Default if CompressLevel is specified.", false);
 IntParameter compressLevel("CompressLevel",
-                           "Use specified compression level 0 = Low, 6 = High",
+                           "Use specified compression level 0 = Low, 9 = High",
                            2);
 BoolParameter noJpeg("NoJPEG",
                      "Disable lossy JPEG compression in Tight encoding.",
@@ -124,12 +127,12 @@ BoolParameter shared("Shared",
 BoolParameter acceptClipboard("AcceptClipboard",
                               "Accept clipboard changes from the server",
                               true);
-BoolParameter setPrimary("SetPrimary",
-                         "Set the primary selection as well as the "
-                         "clipboard selection", true);
 BoolParameter sendClipboard("SendClipboard",
                             "Send clipboard changes to the server", true);
 #if !defined(WIN32) && !defined(__APPLE__)
+BoolParameter setPrimary("SetPrimary",
+                         "Set the primary selection as well as the "
+                         "clipboard selection", true);
 BoolParameter sendPrimary("SendPrimary",
                           "Send the primary selection to the "
                           "server as well as the clipboard selection",
@@ -159,6 +162,7 @@ static VoidParameter* parameterArray[] = {
   &CSecurityTLS::X509CRL,
 #endif // HAVE_GNUTLS
   &SecurityClient::secTypes,
+  &emulateMiddleButton,
   &dotWhenNoCursor,
   &autoSelect,
   &fullColour,
@@ -171,7 +175,6 @@ static VoidParameter* parameterArray[] = {
   &fullScreen,
   &fullScreenAllMonitors,
   &desktopSize,
-  &geometry,
   &remoteResize,
   &viewOnly,
   &shared,
@@ -179,10 +182,10 @@ static VoidParameter* parameterArray[] = {
   &sendClipboard,
 #if !defined(WIN32) && !defined(__APPLE__)
   &sendPrimary,
+  &setPrimary,
 #endif
   &menuKey,
-  &fullscreenSystemKeys,
-  &alertOnFatalError
+  &fullscreenSystemKeys
 };
 
 // Encoding Table
@@ -190,44 +193,35 @@ static struct {
   const char first;
   const char second;
 } replaceMap[] = { { '\n', 'n' },
-                   { '\r', 'r' } };
+                   { '\r', 'r' },
+                   { '\\', '\\' } };
 
 static bool encodeValue(const char* val, char* dest, size_t destSize) {
 
-  bool normalCharacter = true;
   size_t pos = 0;
 
   for (size_t i = 0; (val[i] != '\0') && (i < (destSize - 1)); i++) {
+    bool normalCharacter;
     
     // Check for sequences which will need encoding
-    if (val[i] == '\\') {
+    normalCharacter = true;
+    for (size_t j = 0; j < sizeof(replaceMap)/sizeof(replaceMap[0]); j++) {
 
-      strncpy(dest+pos, "\\\\", 2);
-      pos++;
-      if (pos >= destSize)
-        return false;
+      if (val[i] == replaceMap[j].first) {
+        dest[pos] = '\\';
+        pos++;
+        if (pos >= destSize)
+          return false;
 
-    } else {
+        dest[pos] = replaceMap[j].second;
+        normalCharacter = false;
+        break;
+      }
 
-      for (size_t j = 0; j < sizeof(replaceMap)/sizeof(replaceMap[0]); j++) {
-
-        if (val[i] == replaceMap[j].first) {
-          dest[pos] = '\\';
-          pos++;
-          if (pos >= destSize)
-            return false;
-
-          dest[pos] = replaceMap[j].second;
-          normalCharacter = false;
-          break;
-        }
-
-        if (normalCharacter) {
-          dest[pos] = val[i];
-        }
+      if (normalCharacter) {
+        dest[pos] = val[i];
       }
     }
-    normalCharacter = true; // Reset for next loop
 
     pos++;
     if (pos >= destSize)
@@ -242,36 +236,30 @@ static bool encodeValue(const char* val, char* dest, size_t destSize) {
 static bool decodeValue(const char* val, char* dest, size_t destSize) {
 
   size_t pos = 0;
-  bool escapedCharacter = false;
   
   for (size_t i = 0; (val[i] != '\0') && (i < (destSize - 1)); i++) {
     
     // Check for escape sequences
     if (val[i] == '\\') {
+      bool escapedCharacter;
       
+      escapedCharacter = false;
       for (size_t j = 0; j < sizeof(replaceMap)/sizeof(replaceMap[0]); j++) {
         if (val[i+1] == replaceMap[j].second) {
           dest[pos] = replaceMap[j].first;
           escapedCharacter = true;
-          pos--;
+          i++;
           break;
         }
       }
 
-      if (!escapedCharacter) {
-        if (val[i+1] == '\\') {
-          dest[pos] = val[i];
-          i++;
-        } else {
-          return false;
-        }
-      }
+      if (!escapedCharacter)
+        return false;
 
     } else {
       dest[pos] = val[i];
     }
 
-    escapedCharacter = false; // Reset for next loop
     pos++;
     if (pos >= destSize) {
       return false;
@@ -340,9 +328,10 @@ static void setKeyInt(const char *_name, const int _value, HKEY* hKey) {
 
 static bool getKeyString(const char* _name, char* dest, size_t destSize, HKEY* hKey) {
   
-  DWORD buffersize = 256;
-  WCHAR value[destSize];
+  const DWORD buffersize = 256;
   wchar_t name[buffersize];
+  WCHAR* value;
+  DWORD valuesize;
 
   unsigned size = fl_utf8towc(_name, strlen(_name)+1, name, buffersize);
   if (size >= buffersize) {
@@ -350,8 +339,11 @@ static bool getKeyString(const char* _name, char* dest, size_t destSize, HKEY* h
     return false;
   }
 
-  LONG res = RegQueryValueExW(*hKey, name, 0, NULL, (LPBYTE)value, &buffersize);
+  value = new WCHAR[destSize];
+  valuesize = destSize;
+  LONG res = RegQueryValueExW(*hKey, name, 0, NULL, (LPBYTE)value, &valuesize);
   if (res != ERROR_SUCCESS){
+    delete [] value;
     if (res == ERROR_FILE_NOT_FOUND) {
       // The value does not exist, defaults will be used.
     } else {
@@ -361,18 +353,19 @@ static bool getKeyString(const char* _name, char* dest, size_t destSize, HKEY* h
     return false;
   }
   
-  char utf8val[destSize];
-  size = fl_utf8fromwc(utf8val, sizeof(utf8val), value, wcslen(value)+1);
-  if (size >= sizeof(utf8val)) {
+  char* utf8val = new char[destSize];
+  size = fl_utf8fromwc(utf8val, destSize, value, wcslen(value)+1);
+  delete [] value;
+  if (size >= destSize) {
+    delete [] utf8val;
     vlog.error(_("The parameter %s was too large to read from the registry"), _name);
     return false;
   }
-  const char *ret = utf8val;
   
-  if(decodeValue(ret, dest, destSize))
-    return true;
-  else 
-    return false;
+  bool ret = decodeValue(utf8val, dest, destSize);
+  delete [] utf8val;
+
+  return ret;
 }
 
 
@@ -514,6 +507,7 @@ void saveViewerParameters(const char *filename, const char *servername) {
     }
 
     snprintf(filepath, sizeof(filepath), "%sdefault.tigervnc", homeDir);
+    delete[] homeDir;
   } else {
     snprintf(filepath, sizeof(filepath), "%s", filename);
   }
@@ -555,6 +549,8 @@ char* loadViewerParameters(const char *filename) {
   char decodingBuffer[buffersize];
   static char servername[sizeof(line)];
 
+  memset(servername, '\0', sizeof(servername));
+
   // Load from the registry or a predefined file if no filename was specified.
   if(filename == NULL) {
 
@@ -568,6 +564,7 @@ char* loadViewerParameters(const char *filename) {
                         "can't obtain home directory path."));
 
     snprintf(filepath, sizeof(filepath), "%sdefault.tigervnc", homeDir);
+    delete[] homeDir;
   } else {
     snprintf(filepath, sizeof(filepath), "%s", filename);
   }

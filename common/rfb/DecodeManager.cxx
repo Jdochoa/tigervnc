@@ -64,6 +64,12 @@ DecodeManager::DecodeManager(CConnection *conn) :
       vlog.info("Creating %d decoder thread(s)", (int)cpuCount);
   }
 
+  if (cpuCount == 1) {
+    // Threads are not used on single CPU machines
+    freeBuffers.push_back(new rdr::MemOutStream());
+    return;
+  }
+
   while (cpuCount--) {
     // Twice as many possible entries in the queue as there
     // are worker threads to make sure they don't stall
@@ -123,12 +129,12 @@ void DecodeManager::decodeRect(const Rect& r, int encoding,
 
   // Fast path for single CPU machines to avoid the context
   // switching overhead
-  if (threads.size() == 1) {
+  if (threads.empty()) {
     bufferStream = freeBuffers.front();
     bufferStream->clear();
-    decoder->readRect(r, conn->getInStream(), conn->cp, bufferStream);
+    decoder->readRect(r, conn->getInStream(), conn->server, bufferStream);
     decoder->decodeRect(r, bufferStream->data(), bufferStream->length(),
-                        conn->cp, pb);
+                        conn->server, pb);
     return;
   }
 
@@ -149,7 +155,7 @@ void DecodeManager::decodeRect(const Rect& r, int encoding,
 
   // Read the rect
   bufferStream->clear();
-  decoder->readRect(r, conn->getInStream(), conn->cp, bufferStream);
+  decoder->readRect(r, conn->getInStream(), conn->server, bufferStream);
 
   // Then try to put it on the queue
   entry = new QueueEntry;
@@ -158,12 +164,12 @@ void DecodeManager::decodeRect(const Rect& r, int encoding,
   entry->rect = r;
   entry->encoding = encoding;
   entry->decoder = decoder;
-  entry->cp = &conn->cp;
+  entry->server = &conn->server;
   entry->pb = pb;
   entry->bufferStream = bufferStream;
 
   decoder->getAffectedRegion(r, bufferStream->data(),
-                             bufferStream->length(), conn->cp,
+                             bufferStream->length(), conn->server,
                              &entry->affectedRegion);
 
   queueMutex->lock();
@@ -270,8 +276,8 @@ void DecodeManager::DecodeThread::worker()
     try {
       entry->decoder->decodeRect(entry->rect, entry->bufferStream->data(),
                                  entry->bufferStream->length(),
-                                 *entry->cp, entry->pb);
-    } catch (rdr::Exception e) {
+                                 *entry->server, entry->pb);
+    } catch (rdr::Exception& e) {
       manager->setThreadException(e);
     } catch(...) {
       assert(false);
@@ -340,7 +346,7 @@ DecodeManager::QueueEntry* DecodeManager::DecodeThread::findEntry()
                                             (*iter2)->rect,
                                             (*iter2)->bufferStream->data(),
                                             (*iter2)->bufferStream->length(),
-                                            *entry->cp))
+                                            *entry->server))
           goto next;
       }
     }

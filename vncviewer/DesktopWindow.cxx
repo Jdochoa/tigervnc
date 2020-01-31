@@ -66,7 +66,7 @@ DesktopWindow::DesktopWindow(int w, int h, const char *name,
     firstUpdate(true),
     delayedFullscreen(false), delayedDesktopSize(false),
     keyboardGrabbed(false), mouseGrabbed(false),
-    statsLastFrame(0), statsLastPixels(0), statsLastPosition(0),
+    statsLastUpdates(0), statsLastPixels(0), statsLastPosition(0),
     statsGraph(NULL)
 {
   Fl_Group* group;
@@ -103,12 +103,12 @@ DesktopWindow::DesktopWindow(int w, int h, const char *name,
   int geom_x = 0, geom_y = 0;
   if (strcmp(geometry, "") != 0) {
     int matched;
-    matched = sscanf(geometry.getValueStr(), "+%d+%d", &geom_x, &geom_y);
+    matched = sscanf((const char*)geometry, "+%d+%d", &geom_x, &geom_y);
     if (matched == 2) {
       force_position(1);
     } else {
       int geom_w, geom_h;
-      matched = sscanf(geometry.getValueStr(), "%dx%d+%d+%d", &geom_w, &geom_h, &geom_x, &geom_y);
+      matched = sscanf((const char*)geometry, "%dx%d+%d+%d", &geom_w, &geom_h, &geom_x, &geom_y);
       switch (matched) {
       case 4:
         force_position(1);
@@ -235,7 +235,7 @@ void DesktopWindow::setName(const char *name)
 void DesktopWindow::updateWindow()
 {
   if (firstUpdate) {
-    if (cc->cp.supportsSetDesktopSize) {
+    if (cc->server.supportsSetDesktopSize) {
       // Hack: Wait until we're in the proper mode and position until
       // resizing things, otherwise we might send the wrong thing.
       if (delayedFullscreen)
@@ -281,6 +281,28 @@ void DesktopWindow::setCursor(int width, int height,
                               const rdr::U8* data)
 {
   viewport->setCursor(width, height, hotspot, data);
+}
+
+
+void DesktopWindow::show()
+{
+  Fl_Window::show();
+
+#if !defined(WIN32) && !defined(__APPLE__)
+  XEvent e;
+
+  // Request ability to grab keyboard under Xwayland
+  e.xany.type = ClientMessage;
+  e.xany.window = fl_xid(this);
+  e.xclient.message_type = XInternAtom (fl_display, "_XWAYLAND_MAY_GRAB_KEYBOARD", 0);
+  e.xclient.format = 32;
+  e.xclient.data.l[0] = 1;
+  e.xclient.data.l[1] = 0;
+  e.xclient.data.l[2] = 0;
+  e.xclient.data.l[3] = 0;
+  e.xclient.data.l[4] = 0;
+  XSendEvent(fl_display, RootWindow(fl_display, fl_screen), 0, SubstructureNotifyMask | SubstructureRedirectMask, &e);
+#endif
 }
 
 
@@ -359,9 +381,21 @@ void DesktopWindow::draw()
   // Overlay (if active)
   if (overlay) {
     int ox, oy, ow, oh;
+    int sx, sy, sw, sh;
 
-    ox = X = (w() - overlay->width()) / 2;
-    oy = Y = 50;
+    // Make sure it's properly seen by adjusting it relative to the
+    // primary screen rather than the entire window
+    if (fullscreen_active() && fullScreenAllMonitors) {
+      assert(Fl::screen_count() >= 1);
+      Fl::screen_xywh(sx, sy, sw, sh, 0);
+    } else {
+      sx = 0;
+      sy = 0;
+      sw = w();
+    }
+
+    ox = X = sx + (sw - overlay->width()) / 2;
+    oy = Y = sy + 50;
     ow = overlay->width();
     oh = overlay->height();
 
@@ -399,6 +433,22 @@ void DesktopWindow::draw()
 void DesktopWindow::setLEDState(unsigned int state)
 {
   viewport->setLEDState(state);
+}
+
+
+void DesktopWindow::handleClipboardRequest()
+{
+  viewport->handleClipboardRequest();
+}
+
+void DesktopWindow::handleClipboardAnnounce(bool available)
+{
+  viewport->handleClipboardAnnounce(available);
+}
+
+void DesktopWindow::handleClipboardData(const char* data)
+{
+  viewport->handleClipboardData(data);
 }
 
 
@@ -469,7 +519,7 @@ void DesktopWindow::resize(int x, int y, int w, int h)
     // d) We're not still waiting for startup fullscreen to kick in
     //
     if (not firstUpdate and not delayedFullscreen and
-        ::remoteResize and cc->cp.supportsSetDesktopSize) {
+        ::remoteResize and cc->server.supportsSetDesktopSize) {
       // We delay updating the remote desktop as we tend to get a flood
       // of resize events as the user is dragging the window.
       Fl::remove_timeout(handleResizeTimeout, this);
@@ -486,12 +536,18 @@ void DesktopWindow::menuOverlay(void* data)
   DesktopWindow *self;
 
   self = (DesktopWindow*)data;
-  self->setOverlay(_("Press %s to open the context menu"),
-                   (const char*)menuKey);
+
+  if (strcmp((const char*)menuKey, "") != 0) {
+    self->setOverlay(_("Press %s to open the context menu"),
+                     (const char*)menuKey);
+  }
 }
 
 void DesktopWindow::setOverlay(const char* text, ...)
 {
+  const Fl_Fontsize fontsize = 16;
+  const int margin = 10;
+
   va_list ap;
   char textbuf[1024];
 
@@ -522,22 +578,22 @@ void DesktopWindow::setOverlay(const char* text, ...)
     fl_gc = XDefaultGC(fl_display, 0);
 #endif
 
-  fl_font(FL_HELVETICA, FL_NORMAL_SIZE * 2);
+  fl_font(FL_HELVETICA, fontsize);
   w = 0;
   fl_measure(textbuf, w, h);
 
   // Margins
-  w += 80;
-  h += 40;
+  w += margin * 2 * 2;
+  h += margin * 2;
 
   surface = new Fl_Image_Surface(w, h);
   surface->set_current();
 
   fl_rectf(0, 0, w, h, 0, 0, 0);
 
-  fl_font(FL_HELVETICA, FL_NORMAL_SIZE * 2);
+  fl_font(FL_HELVETICA, fontsize);
   fl_color(FL_WHITE);
-  fl_draw(textbuf, 40, 20 + fl_height() - fl_descent());
+  fl_draw(textbuf, 0, 0, w, h, FL_ALIGN_CENTER);
 
   imageText = surface->image();
   delete surface;
@@ -572,11 +628,6 @@ void DesktopWindow::setOverlay(const char* text, ...)
   }
 
   delete imageText;
-
-  x = (this->w() - image->w()) / 2;
-  y = 50;
-  w = image->w();
-  h = image->h();
 
   overlay = new Surface(image);
   overlayAlpha = 0;
@@ -678,27 +729,18 @@ int DesktopWindow::fltkHandle(int event, Fl_Window *win)
 
   if (dw) {
     switch (event) {
+    // Focus might not stay with us just because we have grabbed the
+    // keyboard. E.g. we might have sub windows, or we're not using
+    // all monitors and the user clicked on another application.
+    // Make sure we update our grabs with the focus changes.
     case FL_FOCUS:
       if (fullscreenSystemKeys) {
-        // FIXME: We reassert the keyboard grabbing on focus as FLTK there are
-        //        some issues we need to work around:
-        //        a) Fl::grab(0) on X11 will release the keyboard grab for us.
-        //        b) Gaining focus on the system level causes FLTK to switch
-        //           window level on OS X.
         if (dw->fullscreen_active())
           dw->grabKeyboard();
       }
-
-      // We may have gotten our lock keys out of sync with the server
-      // whilst we didn't have focus. Try to sort this out.
-      dw->viewport->pushLEDState();
       break;
-
     case FL_UNFOCUS:
       if (fullscreenSystemKeys) {
-        // FIXME: We need to relinquish control when the entire window loses
-        //        focus as it is very tied to this specific window on some
-        //        platforms and we want to be able to open subwindows.
         dw->ungrabKeyboard();
       }
       break;
@@ -760,8 +802,26 @@ void DesktopWindow::fullscreen_on()
     fullscreen_screens(top, bottom, left, right);
   }
 
-  fullscreen();
+  if (!fullscreen_active())
+    fullscreen();
 }
+
+#if !defined(WIN32) && !defined(__APPLE__)
+Bool eventIsFocusWithSerial(Display *display, XEvent *event, XPointer arg)
+{
+  unsigned long serial;
+
+  serial = *(unsigned long*)arg;
+
+  if (event->xany.serial != serial)
+    return False;
+
+  if ((event->type != FocusIn) && (event->type != FocusOut))
+    return False;
+
+  return True;
+}
+#endif
 
 void DesktopWindow::grabKeyboard()
 {
@@ -790,6 +850,11 @@ void DesktopWindow::grabKeyboard()
 #else
   int ret;
 
+  XEvent xev;
+  unsigned long serial;
+
+  serial = XNextRequest(fl_display);
+
   ret = XGrabKeyboard(fl_display, fl_xid(this), True,
                       GrabModeAsync, GrabModeAsync, CurrentTime);
   if (ret) {
@@ -802,6 +867,16 @@ void DesktopWindow::grabKeyboard()
       vlog.error(_("Failure grabbing keyboard"));
     }
     return;
+  }
+
+  // Xorg 1.20+ generates FocusIn/FocusOut even when there is no actual
+  // change of focus. This causes us to get stuck in an endless loop
+  // grabbing and ungrabbing the keyboard. Avoid this by filtering out
+  // any focus events generated by XGrabKeyboard().
+  XSync(fl_display, False);
+  while (XCheckIfEvent(fl_display, &xev, &eventIsFocusWithSerial,
+                       (XPointer)&serial) == True) {
+    vlog.debug("Ignored synthetic focus event cause by grab change");
   }
 #endif
 
@@ -829,7 +904,19 @@ void DesktopWindow::ungrabKeyboard()
   if (Fl::grab())
     return;
 
+  XEvent xev;
+  unsigned long serial;
+
+  serial = XNextRequest(fl_display);
+
   XUngrabKeyboard(fl_display, CurrentTime);
+
+  // See grabKeyboard()
+  XSync(fl_display, False);
+  while (XCheckIfEvent(fl_display, &xev, &eventIsFocusWithSerial,
+                       (XPointer)&serial) == True) {
+    vlog.debug("Ignored synthetic focus event cause by grab change");
+  }
 #endif
 }
 
@@ -962,14 +1049,14 @@ void DesktopWindow::handleResizeTimeout(void *data)
 void DesktopWindow::remoteResize(int width, int height)
 {
   ScreenSet layout;
-  ScreenSet::iterator iter;
+  ScreenSet::const_iterator iter;
 
   if (!fullscreen_active() || (width > w()) || (height > h())) {
     // In windowed mode (or the framebuffer is so large that we need
     // to scroll) we just report a single virtual screen that covers
     // the entire framebuffer.
 
-    layout = cc->cp.screenLayout;
+    layout = cc->server.screenLayout();
 
     // Not sure why we have no screens, but adding a new one should be
     // safe as there is nothing to conflict with...
@@ -1025,8 +1112,8 @@ void DesktopWindow::remoteResize(int width, int height)
       sy -= viewport_rect.tl.y;
 
       // Look for perfectly matching existing screen...
-      for (iter = cc->cp.screenLayout.begin();
-           iter != cc->cp.screenLayout.end(); ++iter) {
+      for (iter = cc->server.screenLayout().begin();
+           iter != cc->server.screenLayout().end(); ++iter) {
         if ((iter->dimensions.tl.x == sx) &&
             (iter->dimensions.tl.y == sy) &&
             (iter->dimensions.width() == sw) &&
@@ -1035,7 +1122,7 @@ void DesktopWindow::remoteResize(int width, int height)
       }
 
       // Found it?
-      if (iter != cc->cp.screenLayout.end()) {
+      if (iter != cc->server.screenLayout().end()) {
         layout.add_screen(*iter);
         continue;
       }
@@ -1043,13 +1130,13 @@ void DesktopWindow::remoteResize(int width, int height)
       // Need to add a new one, which means we need to find an unused id
       while (true) {
         id = rand();
-        for (iter = cc->cp.screenLayout.begin();
-             iter != cc->cp.screenLayout.end(); ++iter) {
+        for (iter = cc->server.screenLayout().begin();
+             iter != cc->server.screenLayout().end(); ++iter) {
           if (iter->id == id)
             break;
         }
 
-        if (iter == cc->cp.screenLayout.end())
+        if (iter == cc->server.screenLayout().end())
           break;
       }
 
@@ -1063,14 +1150,14 @@ void DesktopWindow::remoteResize(int width, int height)
   }
 
   // Do we actually change anything?
-  if ((width == cc->cp.width) &&
-      (height == cc->cp.height) &&
-      (layout == cc->cp.screenLayout))
+  if ((width == cc->server.width()) &&
+      (height == cc->server.height()) &&
+      (layout == cc->server.screenLayout()))
     return;
 
   char buffer[2048];
   vlog.debug("Requesting framebuffer resize from %dx%d to %dx%d",
-             cc->cp.width, cc->cp.height, width, height);
+             cc->server.width(), cc->server.height(), width, height);
   layout.print(buffer, sizeof(buffer));
   vlog.debug("%s", buffer);
 
@@ -1184,7 +1271,9 @@ void DesktopWindow::handleOptions(void *data)
   else
     self->ungrabKeyboard();
 
-  if (fullScreen && !self->fullscreen_active())
+  // Call fullscreen_on even if active since it handles
+  // fullScreenAllMonitors
+  if (fullScreen)
     self->fullscreen_on();
   else if (!fullScreen && self->fullscreen_active())
     self->fullscreen_off();
@@ -1287,7 +1376,7 @@ void DesktopWindow::handleStatsTimeout(void *data)
 
   const size_t statsCount = sizeof(self->stats)/sizeof(self->stats[0]);
 
-  unsigned frame, pixels, pos;
+  unsigned updates, pixels, pos;
   unsigned elapsed;
 
   const unsigned statsWidth = 200;
@@ -1298,12 +1387,12 @@ void DesktopWindow::handleStatsTimeout(void *data)
   Fl_Image_Surface *surface;
   Fl_RGB_Image *image;
 
-  unsigned maxFPS, maxPPS, maxBPS;
+  unsigned maxUPS, maxPPS, maxBPS;
   size_t i;
 
   char buffer[256];
 
-  frame = self->cc->getFrameCount();
+  updates = self->cc->getUpdateCount();
   pixels = self->cc->getPixelCount();
   pos = self->cc->getPosition();
   elapsed = msSince(&self->statsLastTime);
@@ -1312,12 +1401,12 @@ void DesktopWindow::handleStatsTimeout(void *data)
 
   memmove(&self->stats[0], &self->stats[1], sizeof(self->stats[0])*(statsCount-1));
 
-  self->stats[statsCount-1].fps = (frame - self->statsLastFrame) * 1000 / elapsed;
+  self->stats[statsCount-1].ups = (updates - self->statsLastUpdates) * 1000 / elapsed;
   self->stats[statsCount-1].pps = (pixels - self->statsLastPixels) * 1000 / elapsed;
   self->stats[statsCount-1].bps = (pos - self->statsLastPosition) * 1000 / elapsed;
 
   gettimeofday(&self->statsLastTime, NULL);
-  self->statsLastFrame = frame;
+  self->statsLastUpdates = updates;
   self->statsLastPixels = pixels;
   self->statsLastPosition = pos;
 
@@ -1334,23 +1423,23 @@ void DesktopWindow::handleStatsTimeout(void *data)
 
   fl_rect(5, 5, graphWidth, graphHeight, FL_WHITE);
 
-  maxFPS = maxPPS = maxBPS = 0;
+  maxUPS = maxPPS = maxBPS = 0;
   for (i = 0;i < statsCount;i++) {
-    if (self->stats[i].fps > maxFPS)
-      maxFPS = self->stats[i].fps;
+    if (self->stats[i].ups > maxUPS)
+      maxUPS = self->stats[i].ups;
     if (self->stats[i].pps > maxPPS)
       maxPPS = self->stats[i].pps;
     if (self->stats[i].bps > maxBPS)
       maxBPS = self->stats[i].bps;
   }
 
-  if (maxFPS != 0) {
+  if (maxUPS != 0) {
     fl_color(FL_GREEN);
     for (i = 0;i < statsCount-1;i++) {
       fl_line(5 + i * graphWidth / statsCount,
-              5 + graphHeight - graphHeight * self->stats[i].fps / maxFPS,
+              5 + graphHeight - graphHeight * self->stats[i].ups / maxUPS,
               5 + (i+1) * graphWidth / statsCount,
-              5 + graphHeight - graphHeight * self->stats[i+1].fps / maxFPS);
+              5 + graphHeight - graphHeight * self->stats[i+1].ups / maxUPS);
     }
   }
 
@@ -1377,17 +1466,17 @@ void DesktopWindow::handleStatsTimeout(void *data)
   fl_font(FL_HELVETICA, 10);
 
   fl_color(FL_GREEN);
-  snprintf(buffer, sizeof(buffer), "%u fps", self->stats[statsCount-1].fps);
+  snprintf(buffer, sizeof(buffer), "%u upd/s", self->stats[statsCount-1].ups);
   fl_draw(buffer, 5, statsHeight - 5);
 
   fl_color(FL_YELLOW);
-  siPrefix(self->stats[statsCount-1].pps * 8, "pix/s",
+  siPrefix(self->stats[statsCount-1].pps, "pix/s",
            buffer, sizeof(buffer), 3);
   fl_draw(buffer, 5 + (statsWidth-10)/3, statsHeight - 5);
 
   fl_color(FL_RED);
-  iecPrefix(self->stats[statsCount-1].bps * 8, "Bps",
-            buffer, sizeof(buffer), 3);
+  siPrefix(self->stats[statsCount-1].bps * 8, "bps",
+           buffer, sizeof(buffer), 3);
   fl_draw(buffer, 5 + (statsWidth-10)*2/3, statsHeight - 5);
 
   image = surface->image();

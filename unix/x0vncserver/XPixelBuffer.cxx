@@ -41,7 +41,7 @@ XPixelBuffer::XPixelBuffer(Display *dpy, ImageFactory &factory,
   format = PixelFormat(m_image->xim->bits_per_pixel,
                        m_image->xim->depth,
                        (m_image->xim->byte_order == MSBFirst),
-                       m_image->isTrueColor(),
+                       true,
                        m_image->xim->red_mask   >> (ffs(m_image->xim->red_mask) - 1),
                        m_image->xim->green_mask >> (ffs(m_image->xim->green_mask) - 1),
                        m_image->xim->blue_mask  >> (ffs(m_image->xim->blue_mask) - 1),
@@ -50,13 +50,8 @@ XPixelBuffer::XPixelBuffer(Display *dpy, ImageFactory &factory,
                        ffs(m_image->xim->blue_mask) - 1);
 
   // Set up the remaining data of the parent class.
-  width_ = rect.width();
-  height_ = rect.height();
-  data = (rdr::U8 *)m_image->xim->data;
-
-  // Calculate the distance in pixels between two subsequent scan
-  // lines of the framebuffer. This may differ from image width.
-  stride = m_image->xim->bytes_per_line * 8 / m_image->xim->bits_per_pixel;
+  setBuffer(rect.width(), rect.height(), (rdr::U8 *)m_image->xim->data,
+            m_image->xim->bytes_per_line * 8 / m_image->xim->bits_per_pixel);
 
   // Get initial screen image from the X display.
   m_image->get(DefaultRootWindow(m_dpy), m_offsetLeft, m_offsetTop);

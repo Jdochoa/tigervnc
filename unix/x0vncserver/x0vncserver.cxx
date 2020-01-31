@@ -31,8 +31,7 @@
 #include <rfb/Configuration.h>
 #include <rfb/Timer.h>
 #include <network/TcpSocket.h>
-
-#include <vncconfig/QueryConnectDialog.h>
+#include <network/UnixSocket.h>
 
 #include <signal.h>
 #include <X11/X.h>
@@ -58,11 +57,12 @@ IntParameter maxProcessorUsage("MaxProcessorUsage", "Maximum percentage of "
                                "CPU time to be consumed", 35);
 StringParameter displayname("display", "The X display", "");
 IntParameter rfbport("rfbport", "TCP port to listen for RFB protocol",5900);
-IntParameter queryConnectTimeout("QueryConnectTimeout",
-                                 "Number of seconds to show the Accept Connection dialog before "
-                                 "rejecting the connection",
-                                 10);
+StringParameter rfbunixpath("rfbunixpath", "Unix socket to listen for RFB protocol", "");
+IntParameter rfbunixmode("rfbunixmode", "Unix socket access mode", 0600);
 StringParameter hostsFile("HostsFile", "File with IP access control rules", "");
+BoolParameter localhostOnly("localhost",
+                            "Only allow connections from localhost",
+                            false);
 
 //
 // Allow the main loop terminate itself gracefully on receiving a signal.
@@ -74,50 +74,6 @@ static void CleanupSignalHandler(int sig)
 {
   caughtSignal = true;
 }
-
-
-class QueryConnHandler : public VNCServerST::QueryConnectionHandler,
-                         public QueryResultCallback {
-public:
-  QueryConnHandler(Display* dpy, VNCServerST* vs)
-    : display(dpy), server(vs), queryConnectDialog(0), queryConnectSock(0) {}
-  ~QueryConnHandler() { delete queryConnectDialog; }
-
-  // -=- VNCServerST::QueryConnectionHandler interface
-  virtual VNCServerST::queryResult queryConnection(network::Socket* sock,
-                                                   const char* userName,
-                                                   char** reason) {
-    if (queryConnectSock) {
-      *reason = strDup("Another connection is currently being queried.");
-      return VNCServerST::REJECT;
-    }
-    if (!userName) userName = "(anonymous)";
-    queryConnectSock = sock;
-    CharArray address(sock->getPeerAddress());
-    delete queryConnectDialog;
-    queryConnectDialog = new QueryConnectDialog(display, address.buf,
-                                                userName, queryConnectTimeout,
-                                                this);
-    queryConnectDialog->map();
-    return VNCServerST::PENDING;
-  }
-
-  // -=- QueryResultCallback interface
-  virtual void queryApproved() {
-    server->approveConnection(queryConnectSock, true, 0);
-    queryConnectSock = 0;
-  }
-  virtual void queryRejected() {
-    server->approveConnection(queryConnectSock, false,
-                              "Connection rejected by local user");
-    queryConnectSock = 0;
-  }
-private:
-  Display* display;
-  VNCServerST* server;
-  QueryConnectDialog* queryConnectDialog;
-  network::Socket* queryConnectSock;
-};
 
 
 class FileTcpFilter : public TcpFilter
@@ -253,9 +209,6 @@ int main(int argc, char** argv)
 
   Configuration::enableServerParams();
 
-  // Disable configuration parameters which we do not support
-  Configuration::removeParam("AcceptSetDesktopSize");
-
   for (int i = 1; i < argc; i++) {
     if (Configuration::setParam(argv[i]))
       continue;
@@ -291,7 +244,7 @@ int main(int argc, char** argv)
   signal(SIGINT, CleanupSignalHandler);
   signal(SIGTERM, CleanupSignalHandler);
 
-  std::list<TcpListener*> listeners;
+  std::list<SocketListener*> listeners;
 
   try {
     TXWindow::init(dpy,"x0vncserver");
@@ -304,16 +257,22 @@ int main(int argc, char** argv)
     XDesktop desktop(dpy, &geo);
 
     VNCServerST server("x0vncserver", &desktop);
-    QueryConnHandler qcHandler(dpy, &server);
-    server.setQueryConnectionHandler(&qcHandler);
 
-    createTcpListeners(&listeners, 0, (int)rfbport);
-    vlog.info("Listening on port %d", (int)rfbport);
+    if (rfbunixpath.getValueStr()[0] != '\0') {
+      listeners.push_back(new network::UnixListener(rfbunixpath, rfbunixmode));
+      vlog.info("Listening on %s (mode %04o)", (const char*)rfbunixpath, (int)rfbunixmode);
+    } else {
+      if (localhostOnly)
+        createLocalTcpListeners(&listeners, (int)rfbport);
+      else
+        createTcpListeners(&listeners, 0, (int)rfbport);
+      vlog.info("Listening on port %d", (int)rfbport);
+    }
 
     const char *hostsData = hostsFile.getData();
     FileTcpFilter fileTcpFilter(hostsData);
     if (strlen(hostsData) != 0)
-      for (std::list<TcpListener*>::iterator i = listeners.begin();
+      for (std::list<SocketListener*>::iterator i = listeners.begin();
            i != listeners.end();
            i++)
         (*i)->setFilter(&fileTcpFilter);
@@ -335,7 +294,7 @@ int main(int argc, char** argv)
       FD_ZERO(&wfds);
 
       FD_SET(ConnectionNumber(dpy), &rfds);
-      for (std::list<TcpListener*>::iterator i = listeners.begin();
+      for (std::list<SocketListener*>::iterator i = listeners.begin();
            i != listeners.end();
            i++)
         FD_SET((*i)->getFd(), &rfds);
@@ -366,7 +325,7 @@ int main(int argc, char** argv)
         }
       }
 
-      soonestTimeout(&wait_ms, server.checkTimeouts());
+      soonestTimeout(&wait_ms, Timer::checkTimeouts());
 
       tv.tv_sec = wait_ms / 1000;
       tv.tv_usec = (wait_ms % 1000) * 1000;
@@ -387,7 +346,7 @@ int main(int argc, char** argv)
       }
 
       // Accept new VNC connections
-      for (std::list<TcpListener*>::iterator i = listeners.begin();
+      for (std::list<SocketListener*>::iterator i = listeners.begin();
            i != listeners.end();
            i++) {
         if (FD_ISSET((*i)->getFd(), &rfds)) {
@@ -401,7 +360,7 @@ int main(int argc, char** argv)
         }
       }
 
-      server.checkTimeouts();
+      Timer::checkTimeouts();
 
       // Client list could have been changed.
       server.getSockets(&sockets);
@@ -430,6 +389,13 @@ int main(int argc, char** argv)
   }
 
   TXWindow::handleXEvents(dpy);
+
+  // Run listener destructors; remove UNIX sockets etc
+  for (std::list<SocketListener*>::iterator i = listeners.begin();
+       i != listeners.end();
+       i++) {
+    delete *i;
+  }
 
   vlog.info("Terminated");
   return 0;

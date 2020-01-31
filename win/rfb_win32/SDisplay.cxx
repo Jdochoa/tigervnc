@@ -1,4 +1,5 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
+ * Copyright 2011-2019 Pierre Ossman for Cendio AB
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +20,8 @@
 // -=- SDisplay.cxx
 //
 // The SDisplay class encapsulates a particular system display.
+
+#include <assert.h>
 
 #include <rfb_win32/SDisplay.h>
 #include <rfb_win32/Service.h>
@@ -42,7 +45,7 @@ static LogWriter vlog("SDisplay");
 // - SDisplay-specific configuration options
 
 IntParameter rfb::win32::SDisplay::updateMethod("UpdateMethod",
-  "How to discover desktop updates; 0 - Polling, 1 - Application hooking, 2 - Driver hooking.", 1);
+  "How to discover desktop updates; 0 - Polling, 1 - Application hooking, 2 - Driver hooking.", 0);
 BoolParameter rfb::win32::SDisplay::disableLocalInputs("DisableLocalInputs",
   "Disable local keyboard and pointer input while the server is in use", false);
 StringParameter rfb::win32::SDisplay::disconnectAction("DisconnectAction",
@@ -66,9 +69,10 @@ SDisplay::SDisplay()
   : server(0), pb(0), device(0),
     core(0), ptr(0), kbd(0), clipboard(0),
     inputs(0), monitor(0), cleanDesktop(0), cursor(0),
-    statusLocation(0), ledState(0)
+    statusLocation(0), queryConnectionHandler(0), ledState(0)
 {
   updateEvent.h = CreateEvent(0, TRUE, FALSE, 0);
+  terminateEvent.h = CreateEvent(0, TRUE, FALSE, 0);
 }
 
 SDisplay::~SDisplay()
@@ -136,6 +140,25 @@ void SDisplay::stop()
   vlog.debug("stopped");
 
   if (statusLocation) *statusLocation = false;
+}
+
+void SDisplay::terminate()
+{
+  SetEvent(terminateEvent);
+}
+
+
+void SDisplay::queryConnection(network::Socket* sock,
+                               const char* userName)
+{
+  assert(server != NULL);
+
+  if (queryConnectionHandler) {
+    queryConnectionHandler->queryConnection(sock, userName);
+    return;
+  }
+
+  server->approveConnection(sock, true);
 }
 
 
@@ -269,6 +292,22 @@ void SDisplay::restartCore() {
 }
 
 
+void SDisplay::handleClipboardRequest() {
+  CharArray data(clipboard->getClipText());
+  server->sendClipboardData(data.buf);
+}
+
+void SDisplay::handleClipboardAnnounce(bool available) {
+  // FIXME: Wait for an application to actually request it
+  if (available)
+    server->requestClipboard();
+}
+
+void SDisplay::handleClipboardData(const char* data) {
+  clipboard->setClipText(data);
+}
+
+
 void SDisplay::pointerEvent(const Point& pos, int buttonmask) {
   if (pb->getRect().contains(pos)) {
     Point screenPos = pos.translate(screenRect.tl);
@@ -306,34 +345,12 @@ bool SDisplay::checkLedState() {
   return false;
 }
 
-void SDisplay::clientCutText(const char* text, int len) {
-  CharArray clip_sz(len+1);
-  memcpy(clip_sz.buf, text, len);
-  clip_sz.buf[len] = 0;
-  clipboard->setClipText(clip_sz.buf);
-}
-
-
-Point SDisplay::getFbSize() {
-  bool startAndStop = !core;
-
-  // If not started, do minimal initialisation to get desktop size.
-  if (startAndStop)
-    recreatePixelBuffer();
-  Point result = Point(pb->width(), pb->height());
-
-  // Destroy the initialised structures.
-  if (startAndStop)
-    stopCore();
-  return result;
-}
-
 
 void
-SDisplay::notifyClipboardChanged(const char* text, int len) {
+SDisplay::notifyClipboardChanged(bool available) {
   vlog.debug("clipboard text changed");
   if (server)
-    server->serverCutText(text, len);
+    server->announceClipboard(available);
 }
 
 

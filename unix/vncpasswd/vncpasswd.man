@@ -32,6 +32,9 @@ Filter mode.  Read a plain-text password from stdin and write an encrypted
 version to stdout.  Note that in filter mode, short or even empty passwords
 will be silently accepted.
 
+A view-only password must be separated from the normal password by a newline
+character.
+
 
 .SH FILES
 .TP
@@ -44,7 +47,7 @@ Default location of the VNC password file.
 .BR Xvnc (1)
 .BR vncconfig (1),
 .br
-http://www.tigervnc.org
+https://www.tigervnc.org
 
 .SH AUTHORS
 Tristan Richardson, RealVNC Ltd., Antoine Martin, D. R. Commander and others.

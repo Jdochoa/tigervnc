@@ -69,11 +69,17 @@ public:
   // Change client LED state
   void setLEDState(unsigned int state);
 
-  // Fl_Window callback methods
-  void draw();
-  void resize(int x, int y, int w, int h);
+  // Clipboard events
+  void handleClipboardRequest();
+  void handleClipboardAnnounce(bool available);
+  void handleClipboardData(const char* data);
 
-  int handle(int event);
+  // Fl_Window callback methods
+  virtual void show();
+  virtual void draw();
+  virtual void resize(int x, int y, int w, int h);
+
+  virtual int handle(int event);
 
   void fullscreen_on();
 
@@ -129,14 +135,14 @@ private:
   bool mouseGrabbed;
 
   struct statsEntry {
-    unsigned fps;
+    unsigned ups;
     unsigned pps;
     unsigned bps;
   };
   struct statsEntry stats[100];
 
   struct timeval statsLastTime;
-  unsigned statsLastFrame;
+  unsigned statsLastUpdates;
   unsigned statsLastPixels;
   unsigned statsLastPosition;
 

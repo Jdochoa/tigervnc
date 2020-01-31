@@ -100,9 +100,9 @@ static const char *about_text()
            _("TigerVNC Viewer %d-bit v%s\n"
              "Built on: %s\n"
              "Copyright (C) 1999-%d TigerVNC Team and many others (see README.rst)\n"
-             "See http://www.tigervnc.org for information on TigerVNC."),
+             "See https://www.tigervnc.org for information on TigerVNC."),
            (int)sizeof(size_t)*8, PACKAGE_VERSION,
-           BUILD_TIMESTAMP, 2018);
+           BUILD_TIMESTAMP, 2020);
 
   return buffer;
 }
@@ -348,9 +348,28 @@ static void usage(const char *programName)
 #endif
 
   fprintf(stderr,
-          "\nusage: %s [parameters] [host:displayNum] [parameters]\n"
-          "       %s [parameters] -listen [port] [parameters]\n",
+          "\n"
+          "usage: %s [parameters] [host][:displayNum]\n"
+          "       %s [parameters] [host][::port]\n"
+#ifndef WIN32
+          "       %s [parameters] [unix socket]\n"
+#endif
+          "       %s [parameters] -listen [port]\n"
+          "       %s [parameters] [.tigervnc file]\n",
+          programName, programName,
+#ifndef WIN32
+          programName,
+#endif
           programName, programName);
+
+#if !defined(WIN32) && !defined(__APPLE__)
+  fprintf(stderr,"\n"
+          "Options:\n\n"
+          "  -display Xdisplay  - Specifies the X display for the viewer window\n"
+          "  -geometry geometry - Initial position of the main VNC viewer window. See the\n"
+          "                       man page for details.\n");
+#endif
+
   fprintf(stderr,"\n"
           "Parameters can be turned on with -<param> or off with -<param>=0\n"
           "Parameters which take a value can be specified as "
@@ -366,6 +385,41 @@ static void usage(const char *programName)
 #endif
 
   exit(1);
+}
+
+static void
+potentiallyLoadConfigurationFile(char *vncServerName)
+{
+  const bool hasPathSeparator = (strchr(vncServerName, '/') != NULL ||
+                                 (strchr(vncServerName, '\\')) != NULL);
+
+  if (hasPathSeparator) {
+#ifndef WIN32
+    struct stat sb;
+
+    // This might be a UNIX socket, we need to check
+    if (stat(vncServerName, &sb) == -1) {
+      // Some access problem; let loadViewerParameters() deal with it...
+    } else {
+      if ((sb.st_mode & S_IFMT) == S_IFSOCK)
+        return;
+    }
+#endif
+
+    try {
+      const char* newServerName;
+      newServerName = loadViewerParameters(vncServerName);
+      // This might be empty, but we still need to clear it so we
+      // don't try to connect to the filename
+      strncpy(vncServerName, newServerName, VNCSERVERNAMELEN-1);
+      vncServerName[VNCSERVERNAMELEN-1] = '\0';
+    } catch (rfb::Exception& e) {
+      vlog.error("%s", e.str());
+      if (alertOnFatalError)
+        fl_alert("%s", e.str());
+      exit(EXIT_FAILURE);
+    }
+  }
 }
 
 #ifndef WIN32
@@ -435,9 +489,9 @@ static int mktunnel()
   int localPort = findFreeTcpPort();
   int remotePort;
 
-  gatewayHost = strDup(via.getValueStr());
   if (interpretViaParam(remoteHost, &remotePort, localPort) != 0)
     return 1;
+  gatewayHost = (const char*)via;
   createTunnel(gatewayHost, remoteHost, remotePort, localPort);
 
   return 0;
@@ -484,11 +538,15 @@ int main(int argc, char** argv)
   Configuration::enableViewerParams();
 
   /* Load the default parameter settings */
-  const char* defaultServerName;
+  char defaultServerName[VNCSERVERNAMELEN] = "";
   try {
-    defaultServerName = loadViewerParameters(NULL);
+    const char* configServerName;
+    configServerName = loadViewerParameters(NULL);
+    if (configServerName != NULL) {
+      strncpy(defaultServerName, configServerName, VNCSERVERNAMELEN-1);
+      defaultServerName[VNCSERVERNAMELEN-1] = '\0';
+    }
   } catch (rfb::Exception& e) {
-    defaultServerName = "";
     vlog.error("%s", e.str());
     if (alertOnFatalError)
       fl_alert("%s", e.str());
@@ -515,6 +573,9 @@ int main(int argc, char** argv)
     vncServerName[VNCSERVERNAMELEN - 1] = '\0';
     i++;
   }
+
+  // Check if the server name in reality is a configuration file
+  potentiallyLoadConfigurationFile(vncServerName);
 
   mkvnchomedir();
 
@@ -547,7 +608,7 @@ int main(int argc, char** argv)
 #endif
 
   if (listenMode) {
-    std::list<TcpListener*> listeners;
+    std::list<SocketListener*> listeners;
     try {
       int port = 5500;
       if (isdigit(vncServerName[0]))
@@ -561,7 +622,7 @@ int main(int argc, char** argv)
       while (sock == NULL) {
         fd_set rfds;
         FD_ZERO(&rfds);
-        for (std::list<TcpListener*>::iterator i = listeners.begin();
+        for (std::list<SocketListener*>::iterator i = listeners.begin();
              i != listeners.end();
              i++)
           FD_SET((*i)->getFd(), &rfds);
@@ -576,7 +637,7 @@ int main(int argc, char** argv)
           }
         }
 
-        for (std::list<TcpListener*>::iterator i = listeners.begin ();
+        for (std::list<SocketListener*>::iterator i = listeners.begin ();
              i != listeners.end();
              i++)
           if (FD_ISSET((*i)->getFd(), &rfds)) {

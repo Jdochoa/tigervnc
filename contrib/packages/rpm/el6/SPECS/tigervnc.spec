@@ -1,7 +1,6 @@
-%{!?_self_signed: %define _self_signed 1}
 %{!?_bootstrap: %define _bootstrap 1}
 %define tigervnc_src_dir %{_builddir}/%{name}-%{version}%{?snap:-%{snap}}
-%global scl_name %{name}16
+%global scl_name %{name}/%{version}
 %if %{_bootstrap}
 %define static_lib_buildroot %{tigervnc_src_dir}/opt/%{name}/%{scl_name}
 %else
@@ -10,7 +9,7 @@
 
 Name: tigervnc
 Version: @VERSION@
-Release: 5%{?snap:.%{snap}}%{?dist}
+Release: 8%{?snap:.%{snap}}%{?dist}
 Summary: A TigerVNC remote display system
 
 Group: User Interface/Desktops
@@ -21,12 +20,12 @@ URL: http://www.tigervnc.com
 Source0: %{name}-%{version}%{?snap:-%{snap}}.tar.bz2
 Source1: vncserver.service
 Source2: vncserver.sysconfig
-Source11: http://fltk.org/pub/fltk/1.3.3/fltk-1.3.3-source.tar.gz
-Source13: http://downloads.sourceforge.net/project/libpng/libpng15/1.5.24/libpng-1.5.24.tar.bz2
-Source14: https://ftp.gnu.org/gnu/gmp/gmp-6.0.0a.tar.bz2
-Source15: http://ftp.gnu.org/gnu/libtasn1/libtasn1-4.7.tar.gz
-Source16: https://ftp.gnu.org/gnu/nettle/nettle-2.7.1.tar.gz
-Source17: ftp://ftp.gnutls.org/gcrypt/gnutls/v3.3/gnutls-3.3.19.tar.xz
+Source11: https://www.fltk.org/pub/fltk/1.3.5/fltk-1.3.5-source.tar.gz
+Source13: https://downloads.sourceforge.net/project/libpng/libpng16/1.6.37/libpng-1.6.37.tar.gz
+Source14: https://ftp.gnu.org/gnu/gmp/gmp-6.1.2.tar.bz2
+Source15: https://ftp.gnu.org/gnu/libtasn1/libtasn1-4.14.tar.gz
+Source16: https://ftp.gnu.org/gnu/nettle/nettle-3.4.1.tar.gz
+Source17: https://www.gnupg.org/ftp/gcrypt/gnutls/v3.3/gnutls-3.3.30.tar.xz
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 BuildRequires: gcc, gcc-c++
@@ -36,8 +35,7 @@ BuildRequires: xorg-x11-xtrans-devel, xorg-x11-util-macros, libXtst-devel
 BuildRequires: libdrm-devel, libXt-devel, pixman-devel libXfont-devel
 BuildRequires: libxkbfile-devel, openssl-devel, libpciaccess-devel
 BuildRequires: mesa-libGL-devel, libXinerama-devel, ImageMagick
-BuildRequires: freetype-devel, libXdmcp-devel
-BuildRequires: java-devel, jpackage-utils
+BuildRequires: freetype-devel, libXdmcp-devel, libXft-devel, libXrandr-devel
 BuildRequires: libjpeg-turbo-devel, pam-devel
 BuildRequires: cmake >= 2.8
 %if !%{_bootstrap}
@@ -51,8 +49,8 @@ Requires(post): initscripts chkconfig coreutils
 Requires(postun): coreutils
 Requires: libjpeg-turbo
 Requires: hicolor-icon-theme
-Requires: tigervnc-license
-Requires: tigervnc-icons
+Requires: tigervnc-license = %{version}-%{release}
+Requires: tigervnc-icons = %{version}-%{release}
 
 Provides: vnc = 4.1.3-2, vnc-libs = 4.1.3-2
 Obsoletes: vnc < 4.1.3-2, vnc-libs < 4.1.3-2
@@ -60,7 +58,6 @@ Provides: tightvnc = 1.5.0-0.15.20090204svn3586
 Obsoletes: tightvnc < 1.5.0-0.15.20090204svn3586
 
 Patch16: tigervnc-xorg-manpages.patch
-Patch17: nettle-2.7.1-ecc-cve.patch
 
 %description
 Virtual Network Computing (VNC) is a remote display system which
@@ -78,7 +75,7 @@ Obsoletes: vnc-server < 4.1.3-2, vnc-libs < 4.1.3-2
 Provides: tightvnc-server = 1.5.0-0.15.20090204svn3586
 Obsoletes: tightvnc-server < 1.5.0-0.15.20090204svn3586
 Requires: perl
-Requires: tigervnc-server-minimal
+Requires: tigervnc-server-minimal = %{version}-%{release}
 Requires: xorg-x11-xauth
 
 %description server
@@ -97,7 +94,7 @@ Requires(preun):initscripts
 Requires(postun):initscripts
 
 Requires: mesa-dri-drivers, xkeyboard-config, xorg-x11-xkb-utils
-Requires: tigervnc-license
+Requires: tigervnc-license = %{version}-%{release}
 
 %description server-minimal
 The VNC system allows you to access the same desktop from a wide
@@ -114,22 +111,12 @@ Obsoletes: vnc-server < 4.1.3-2, vnc-libs < 4.1.3-2
 Provides: tightvnc-server-module = 1.5.0-0.15.20090204svn3586
 Obsoletes: tightvnc-server-module < 1.5.0-0.15.20090204svn3586
 Requires: xorg-x11-server-Xorg
-Requires: tigervnc-license
+Requires: tigervnc-license = %{version}-%{release}
 
 %description server-module
 This package contains libvnc.so module to X server, allowing others
 to access the desktop on your machine.
 %endif
-
-%package server-applet
-Summary: Java TigerVNC viewer applet for TigerVNC server
-Group: User Interface/X
-Requires: tigervnc-server, java, jpackage-utils
-BuildArch: noarch
-
-%description server-applet
-The Java TigerVNC viewer applet for web browsers. Install this package to allow
-clients to use web browser when connect to the TigerVNC server.
 
 %package license
 Summary: License of TigerVNC suite
@@ -162,14 +149,11 @@ rm -rf $RPM_BUILD_ROOT
 
 %if %{_bootstrap}
 tar xzf %SOURCE11
-tar xjf %SOURCE13
+tar xzf %SOURCE13
 tar xjf %SOURCE14
 tar xzf %SOURCE15
 tar xzf %SOURCE16
-pushd nettle-*
-%patch17 -p1 -b .ecc-cve
-popd
-xzcat %SOURCE17 | tar xf -
+tar xJf %SOURCE17
 %endif
 
 cp -r /usr/share/xorg-x11-server-source/* unix/xserver
@@ -208,7 +192,7 @@ popd
 
 echo "*** Building libtasn1 ***"
 pushd libtasn1-*
-LDFLAGS="-L%{static_lib_buildroot}%{_libdir} $LDFLAGS" ./configure --prefix=%{_prefix} --libdir=%{_libdir} --enable-static --disable-shared --host=%{_host} --build=%{_build}
+LDFLAGS="-L%{static_lib_buildroot}%{_libdir} $LDFLAGS" CFLAGS="$CFLAGS -std=c99" CXXFLAGS="$CXXFLAGS -std=c99" ./configure --prefix=%{_prefix} --libdir=%{_libdir} --enable-static --disable-shared --host=%{_host} --build=%{_build}
 make %{?_smp_mflags} DESTDIR=%{static_lib_buildroot} install
 find %{static_lib_buildroot}%{_prefix} -type f -name "*.la" -delete
 find %{static_lib_buildroot}%{_prefix} -type f -name "*.pc" -exec sed -i -e "s|libdir=%{_libdir}|libdir=%{static_lib_buildroot}%{_libdir}|" {} \;
@@ -218,7 +202,7 @@ popd
 echo "*** Building nettle ***"
 pushd nettle-*
 autoreconf -fiv
-LDFLAGS="-L%{static_lib_buildroot}%{_libdir} -Wl,-Bstatic -ltasn1 -lgmp -Wl,-Bdynamic $LDFLAGS" ./configure --prefix=%{_prefix} --libdir=%{_libdir} --enable-static --disable-shared --disable-openssl --host=%{_host} --build=%{_build}
+LDFLAGS="-L%{static_lib_buildroot}%{_libdir} -Wl,-Bstatic -ltasn1 -lgmp -Wl,-Bdynamic $LDFLAGS" CFLAGS="$CFLAGS -std=c99" CXXFLAGS="$CXXFLAGS -std=c99" ./configure --prefix=%{_prefix} --libdir=%{_libdir} --enable-static --disable-shared --disable-openssl --host=%{_host} --build=%{_build}
 make %{?_smp_mflags} DESTDIR=%{static_lib_buildroot} install
 find %{static_lib_buildroot}%{_prefix} -type f -name "*.la" -delete
 find %{static_lib_buildroot}%{_prefix} -type f -name "*.pc" -exec sed -i -e "s|libdir=%{_libdir}|libdir=%{static_lib_buildroot}%{_libdir}|" {} \;
@@ -227,7 +211,7 @@ popd
 
 echo "*** Building gnutls ***"
 pushd gnutls-*
-LDFLAGS="-L%{static_lib_buildroot}%{_libdir} -Wl,-Bstatic -lnettle -lhogweed -ltasn1 -lgmp -Wl,-Bdynamic $LDFLAGS" ./configure \
+LDFLAGS="-L%{static_lib_buildroot}%{_libdir} -Wl,-Bstatic -lhogweed -lnettle -ltasn1 -lgmp -Wl,-Bdynamic $LDFLAGS" ./configure \
   --prefix=%{_prefix} \
   --libdir=%{_libdir} \
   --host=%{_host} \
@@ -267,38 +251,29 @@ echo "*** Building fltk ***"
 pushd fltk-*
 %endif
 export CMAKE_PREFIX_PATH="%{static_lib_buildroot}%{_prefix}:%{_prefix}"
-export CMAKE_EXE_LINKER_FLAGS=$LDFLAGS
+export CMAKE_EXE_LINKER_FLAGS="-L%{static_lib_buildroot}%{_libdir} $LDFLAGS"
 export PKG_CONFIG="pkg-config --static"
 %if %{_bootstrap}
-CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" LDFLAGS="-L%{static_lib_buildroot}%{_libdir} -Wl,-Bstatic -lpng -Wl,-Bdynamic $LDFLAGS" ./configure \
-  --prefix=%{_prefix} \
-  --libdir=%{_libdir} \
-  --host=%{_host} \
-  --build=%{_build} \
-  --enable-x11 \
-  --enable-gl \
-  --disable-shared \
-  --enable-localjpeg \
-  --enable-localzlib \
-  --disable-localpng \
-  --enable-xinerama \
-  --enable-xft \
-  --enable-xdbe \
-  --enable-xfixes \
-  --enable-xcursor \
-  --with-x
+CFLAGS="-I%{static_lib_buildroot}%{_includedir} ${CFLAGS}" CXXFLAGS="-I%{static_lib_buildroot}%{_includedir} ${CXXFLAGS}" LDFLAGS="-L%{static_lib_buildroot}%{_libdir} -Wl,-Bstatic -lpng -Wl,-Bdynamic ${LDFLAGS}" %{cmake} -G"Unix Makefiles" \
+  -DCMAKE_INSTALL_PREFIX=%{_prefix} \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DOPTION_BUILD_EXAMPLES=off \
+  -DOPTION_USE_SYSTEM_LIBPNG=1 \
+  -DOPTION_USE_SYSTEM_LIBJPEG=0 \
+  -DOPTION_USE_SYSTEM_ZLIB=0
+
 make %{?_smp_mflags} 
 make DESTDIR=%{static_lib_buildroot} install
 popd
 %endif
 
-%{cmake} -G"Unix Makefiles" \
+CFLAGS="-I%{static_lib_buildroot}%{_includedir} ${CFLAGS}" CXXFLAGS="-I%{static_lib_buildroot}%{_includedir} ${CXXFLAGS}" LDFLAGS="-L%{static_lib_buildroot}%{_libdir} ${LDFLAGS}" %{cmake} -G"Unix Makefiles" \
   -DBUILD_STATIC=off \
   -DCMAKE_INSTALL_PREFIX=%{_prefix} \
   -DFLTK_LIBRARIES="%{static_lib_buildroot}%{_libdir}/libfltk.a;%{static_lib_buildroot}%{_libdir}/libfltk_images.a;%{static_lib_buildroot}%{_libdir}/libpng.a" \
   -DFLTK_INCLUDE_DIR=%{static_lib_buildroot}%{_includedir} \
   -DGNUTLS_INCLUDE_DIR=%{static_lib_buildroot}%{_includedir} \
-  -DGNUTLS_LIBRARY="%{static_lib_buildroot}%{_libdir}/libgnutls.a;%{static_lib_buildroot}%{_libdir}/libtasn1.a;%{static_lib_buildroot}%{_libdir}/libnettle.a;%{static_lib_buildroot}%{_libdir}/libhogweed.a;%{static_lib_buildroot}%{_libdir}/libgmp.a"
+  -DGNUTLS_LIBRARY="%{static_lib_buildroot}%{_libdir}/libgnutls.a;%{static_lib_buildroot}%{_libdir}/libtasn1.a;%{static_lib_buildroot}%{_libdir}/libhogweed.a;%{static_lib_buildroot}%{_libdir}/libnettle.a;%{static_lib_buildroot}%{_libdir}/libgmp.a"
 make %{?_smp_mflags}
 
 pushd unix/xserver
@@ -330,21 +305,6 @@ pushd media
 make
 popd
 
-# Build Java applet
-pushd java
-%{cmake} \
-%if !%{_self_signed}
-	-DJAVA_KEYSTORE=%{_keystore} \
-	-DJAVA_KEYSTORE_TYPE=%{_keystore_type} \
-	-DJAVA_KEY_ALIAS=%{_key_alias} \
-	-DJAVA_STOREPASS=":env STOREPASS" \
-	-DJAVA_KEYPASS=":env KEYPASS" \
-	-DJAVA_TSA_URL=http://timestamp.geotrust.com/tsa .
-%endif
-
-make
-popd
-
 %install
 %if %{_bootstrap}
 for l in gmp libtasn1 nettle gnutls libpng fltk; do
@@ -367,13 +327,6 @@ mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/init.d
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig
 install -m644 %{SOURCE1} $RPM_BUILD_ROOT%{_sysconfdir}/init.d/vncserver
 install -m644 %{SOURCE2} $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/vncservers
-
-# Install Java applet
-pushd java
-mkdir -p $RPM_BUILD_ROOT%{_datadir}/vnc/classes
-install -m755 VncViewer.jar $RPM_BUILD_ROOT%{_datadir}/vnc/classes
-install -m644 com/tigervnc/vncviewer/index.vnc $RPM_BUILD_ROOT%{_datadir}/vnc/classes
-popd
 
 %find_lang %{name} %{name}.lang
 
@@ -437,11 +390,6 @@ fi
 %{_libdir}/xorg/modules/extensions/libvnc.so
 %endif
 
-%files server-applet
-%defattr(-,root,root,-)
-%doc java/com/tigervnc/vncviewer/README
-%{_datadir}/vnc/classes/*
-
 %files license
 %defattr(-,root,root,-)
 %doc LICENCE.TXT
@@ -460,6 +408,18 @@ fi
 %endif
 
 %changelog
+* Sat Dec 28 2019 Brian P. Hinz <bphinz@users.sourceforge.net> 1.10.80-8
+- Update fltk, libpng, libtasn1, nettle. Fix linker errors.
+
+* Mon Jan 14 2019 Pierre Ossman <ossman@cendio.se> 1.9.80-7
+- Add libXrandr-devel as a dependency so x0vncserver gets resize support.
+
+* Sun Dec 09 2018 Mark Mielke <mmielke@ciena.com> 1.9.80-6
+- Update package dependencies to require version alignment between packages.
+
+* Sun Jul 22 2018 Brian P. Hinz <bphinz@users.sourceforge.net> 1.9.80-5
+- Update gnutls, libtasn1, libpng, gmp, fltk to latest upstream versions.
+
 * Mon Jun 20 2016 Brian P. Hinz <bphinz@users.sourceforge.net> 1.6.80-5
 - Patch for Xorg 1.17 due to vendor bump of Xorg version
 

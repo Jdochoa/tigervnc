@@ -1,5 +1,5 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
- * Copyright 2009-2017 Pierre Ossman for Cendio AB
+ * Copyright 2009-2019 Pierre Ossman for Cendio AB
  * Copyright 2014 Brian P. Hinz
  * 
  * This is free software; you can redistribute it and/or modify
@@ -22,6 +22,7 @@
 //
 
 #include <assert.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <strings.h>
@@ -32,10 +33,9 @@
 #include <fcntl.h>
 #include <sys/utsname.h>
 
-#include <network/TcpSocket.h>
+#include <network/Socket.h>
 #include <rfb/Exception.h>
 #include <rfb/VNCServerST.h>
-#include <rfb/HTTPServer.h>
 #include <rfb/LogWriter.h>
 #include <rfb/Configuration.h>
 #include <rfb/ServerCore.h>
@@ -47,6 +47,10 @@
 #include "vncSelection.h"
 #include "XorgGlue.h"
 #include "Input.h"
+
+extern "C" {
+void vncSetGlueContext(int screenIndex);
+}
 
 using namespace rfb;
 using namespace network;
@@ -63,74 +67,24 @@ IntParameter queryConnectTimeout("QueryConnectTimeout",
                                  "rejecting the connection",
                                  10);
 
-class FileHTTPServer : public rfb::HTTPServer {
-public:
-  FileHTTPServer(XserverDesktop* d) : desktop(d) {}
-  virtual ~FileHTTPServer() {}
-
-  virtual rdr::InStream* getFile(const char* name, const char** contentType,
-                                 int* contentLength, time_t* lastModified)
-  {
-    if (name[0] != '/' || strstr(name, "..") != 0) {
-      vlog.info("http request was for invalid file name");
-      return 0;
-    }
-
-    if (strcmp(name, "/") == 0) name = "/index.vnc";
-
-    CharArray httpDirStr(httpDir.getData());
-    CharArray fname(strlen(httpDirStr.buf)+strlen(name)+1);
-    sprintf(fname.buf, "%s%s", httpDirStr.buf, name);
-    int fd = open(fname.buf, O_RDONLY);
-    if (fd < 0) return 0;
-    rdr::InStream* is = new rdr::FdInStream(fd, -1, 0, true);
-    *contentType = guessContentType(name, *contentType);
-    if (strlen(name) > 4 && strcasecmp(&name[strlen(name)-4], ".vnc") == 0) {
-      is = new rdr::SubstitutingInStream(is, desktop, 20);
-      *contentType = "text/html";
-    } else {
-      struct stat st;
-      if (fstat(fd, &st) == 0) {
-        *contentLength = st.st_size;
-        *lastModified = st.st_mtime;
-      }
-    }
-    return is;
-  }
-
-  XserverDesktop* desktop;
-};
-
 
 XserverDesktop::XserverDesktop(int screenIndex_,
-                               std::list<network::TcpListener*> listeners_,
-                               std::list<network::TcpListener*> httpListeners_,
+                               std::list<network::SocketListener*> listeners_,
                                const char* name, const rfb::PixelFormat &pf,
                                int width, int height,
                                void* fbptr, int stride)
   : screenIndex(screenIndex_),
-    server(0), httpServer(0),
-    listeners(listeners_), httpListeners(httpListeners_),
-    directFbptr(true),
+    server(0), listeners(listeners_),
+    shadowFramebuffer(NULL),
     queryConnectId(0), queryConnectTimer(this)
 {
   format = pf;
 
   server = new VNCServerST(name, this);
   setFramebuffer(width, height, fbptr, stride);
-  server->setQueryConnectionHandler(this);
 
-  if (!httpListeners.empty ())
-    httpServer = new FileHTTPServer(this);
-
-  for (std::list<TcpListener*>::iterator i = listeners.begin();
+  for (std::list<SocketListener*>::iterator i = listeners.begin();
        i != listeners.end();
-       i++) {
-    vncSetNotifyFd((*i)->getFd(), screenIndex, true, false);
-  }
-
-  for (std::list<TcpListener*>::iterator i = httpListeners.begin();
-       i != httpListeners.end();
        i++) {
     vncSetNotifyFd((*i)->getFd(), screenIndex, true, false);
   }
@@ -143,14 +97,8 @@ XserverDesktop::~XserverDesktop()
     delete listeners.back();
     listeners.pop_back();
   }
-  while (!httpListeners.empty()) {
-    vncRemoveNotifyFd(listeners.back()->getFd());
-    delete httpListeners.back();
-    httpListeners.pop_back();
-  }
-  if (!directFbptr)
-    delete [] data;
-  delete httpServer;
+  if (shadowFramebuffer)
+    delete [] shadowFramebuffer;
   delete server;
 }
 
@@ -168,153 +116,56 @@ void XserverDesktop::setFramebuffer(int w, int h, void* fbptr, int stride_)
 {
   ScreenSet layout;
 
-  width_ = w;
-  height_ = h;
-
-  if (!directFbptr) {
-    delete [] data;
-    directFbptr = true;
+  if (shadowFramebuffer) {
+    delete [] shadowFramebuffer;
+    shadowFramebuffer = NULL;
   }
 
   if (!fbptr) {
-    fbptr = new rdr::U8[w * h * (format.bpp/8)];
+    shadowFramebuffer = new rdr::U8[w * h * (format.bpp/8)];
+    fbptr = shadowFramebuffer;
     stride_ = w;
-    directFbptr = false;
   }
 
-  data = (rdr::U8*)fbptr;
-  stride = stride_;
+  setBuffer(w, h, (rdr::U8*)fbptr, stride_);
 
-  layout = computeScreenLayout();
+  vncSetGlueContext(screenIndex);
+  layout = ::computeScreenLayout(&outputIdMap);
 
   server->setPixelBuffer(this, layout);
 }
 
 void XserverDesktop::refreshScreenLayout()
 {
-  server->setScreenLayout(computeScreenLayout());
+  vncSetGlueContext(screenIndex);
+  server->setScreenLayout(::computeScreenLayout(&outputIdMap));
 }
 
-ScreenSet XserverDesktop::computeScreenLayout()
+void XserverDesktop::start(rfb::VNCServer* vs)
 {
-  ScreenSet layout;
-  OutputIdMap newIdMap;
-
-  for (int i = 0;i < vncRandRGetOutputCount(screenIndex);i++) {
-      intptr_t outputId;
-      int x, y, width, height;
-
-      /* Disabled? */
-      if (!vncRandRIsOutputEnabled(screenIndex, i))
-          continue;
-
-      outputId = vncRandRGetOutputId(screenIndex, i);
-
-      /* Known output? */
-      if (outputIdMap.count(outputId) == 1)
-        newIdMap[outputId] = outputIdMap[outputId];
-      else {
-        rdr::U32 id;
-        OutputIdMap::const_iterator iter;
-
-        while (true) {
-          id = rand();
-          for (iter = outputIdMap.begin();iter != outputIdMap.end();++iter) {
-            if (iter->second == id)
-              break;
-          }
-          if (iter == outputIdMap.end())
-            break;
-        }
-
-        newIdMap[outputId] = id;
-      }
-
-      vncRandRGetOutputDimensions(screenIndex, i, &x, &y, &width, &height);
-
-      layout.add_screen(Screen(newIdMap[outputId], x, y, width, height, 0));
-  }
-
-  /* Only keep the entries that are currently active */
-  outputIdMap = newIdMap;
-
-  /*
-   * Make sure we have something to display. Hopefully it's just temporary
-   * that we have no active outputs...
-   */
-  if (layout.num_screens() == 0)
-    layout.add_screen(Screen(0, 0, 0, vncGetScreenWidth(screenIndex),
-                             vncGetScreenHeight(screenIndex), 0));
-
-  return layout;
+  // We already own the server object, and we always keep it in a
+  // ready state
+  assert(vs == server);
 }
 
-char* XserverDesktop::substitute(const char* varName)
+void XserverDesktop::stop()
 {
-  if (strcmp(varName, "$$") == 0) {
-    return rfb::strDup("$");
-  }
-  if (strcmp(varName, "$PORT") == 0) {
-    char* str = new char[10];
-    sprintf(str, "%d", listeners.empty () ? 0 : (*listeners.begin ())->getMyPort());
-    return str;
-  }
-  if (strcmp(varName, "$WIDTH") == 0) {
-    char* str = new char[10];
-    sprintf(str, "%d", width());
-    return str;
-  }
-  if (strcmp(varName, "$HEIGHT") == 0) {
-    char* str = new char[10];
-    sprintf(str, "%d", height());
-    return str;
-  }
-  if (strcmp(varName, "$APPLETWIDTH") == 0) {
-    char* str = new char[10];
-    sprintf(str, "%d", width());
-    return str;
-  }
-  if (strcmp(varName, "$APPLETHEIGHT") == 0) {
-    char* str = new char[10];
-    sprintf(str, "%d", height());
-    return str;
-  }
-  if (strcmp(varName, "$DESKTOP") == 0) {
-    return rfb::strDup(server->getName());
-  }
-  if (strcmp(varName, "$DISPLAY") == 0) {
-    struct utsname uts;
-    uname(&uts);
-    char* str = new char[256];
-    strncpy(str, uts.nodename, 240);
-    str[239] = '\0'; /* Ensure string is zero-terminated */
-    strcat(str, ":");
-    strncat(str, vncGetDisplay(), 10);
-    return str;
-  }
-  if (strcmp(varName, "$USER") == 0) {
-    struct passwd* user = getpwuid(getuid());
-    return rfb::strDup(user ? user->pw_name : "?");
-  }
-  return 0;
 }
 
-rfb::VNCServerST::queryResult
-XserverDesktop::queryConnection(network::Socket* sock,
-                                const char* userName,
-                                char** reason)
+void XserverDesktop::queryConnection(network::Socket* sock,
+                                     const char* userName)
 {
   int count;
 
   if (queryConnectTimer.isStarted()) {
-    *reason = strDup("Another connection is currently being queried.");
-    return rfb::VNCServerST::REJECT;
+    server->approveConnection(sock, false, "Another connection is currently being queried.");
+    return;
   }
 
   count = vncNotifyQueryConnect();
   if (count == 0) {
-    *reason = strDup("Unable to query the local user to accept the connection.");
-    return rfb::VNCServerST::REJECT;
+    server->approveConnection(sock, false, "Unable to query the local user to accept the connection.");
+    return;
   }
 
   queryConnectAddress.replaceBuf(sock->getPeerAddress());
@@ -325,8 +176,33 @@ XserverDesktop::queryConnection(network::Socket* sock,
   queryConnectSocket = sock;
 
   queryConnectTimer.start(queryConnectTimeout * 1000);
+}
 
-  return rfb::VNCServerST::PENDING;
+void XserverDesktop::requestClipboard()
+{
+  try {
+    server->requestClipboard();
+  } catch (rdr::Exception& e) {
+    vlog.error("XserverDesktop::requestClipboard: %s",e.str());
+  }
+}
+
+void XserverDesktop::announceClipboard(bool available)
+{
+  try {
+    server->announceClipboard(available);
+  } catch (rdr::Exception& e) {
+    vlog.error("XserverDesktop::announceClipboard: %s",e.str());
+  }
+}
+
+void XserverDesktop::sendClipboardData(const char* data)
+{
+  try {
+    server->sendClipboardData(data);
+  } catch (rdr::Exception& e) {
+    vlog.error("XserverDesktop::sendClipboardData: %s",e.str());
+  }
 }
 
 void XserverDesktop::bell()
@@ -337,15 +213,6 @@ void XserverDesktop::bell()
 void XserverDesktop::setLEDState(unsigned int state)
 {
   server->setLEDState(state);
-}
-
-void XserverDesktop::serverCutText(const char* str, int len)
-{
-  try {
-    server->serverCutText(str, len);
-  } catch (rdr::Exception& e) {
-    vlog.error("XserverDesktop::serverCutText: %s",e.str());
-  }
 }
 
 void XserverDesktop::setDesktopName(const char* name)
@@ -418,13 +285,9 @@ void XserverDesktop::handleSocketEvent(int fd, bool read, bool write)
     if (read) {
       if (handleListenerEvent(fd, &listeners, server))
         return;
-      if (handleListenerEvent(fd, &httpListeners, httpServer))
-        return;
     }
 
     if (handleSocketEvent(fd, server, read, write))
-      return;
-    if (handleSocketEvent(fd, httpServer, read, write))
       return;
 
     vlog.error("Cannot find file descriptor for socket event");
@@ -434,10 +297,10 @@ void XserverDesktop::handleSocketEvent(int fd, bool read, bool write)
 }
 
 bool XserverDesktop::handleListenerEvent(int fd,
-                                         std::list<TcpListener*>* sockets,
+                                         std::list<SocketListener*>* sockets,
                                          SocketServer* sockserv)
 {
-  std::list<TcpListener*>::iterator i;
+  std::list<SocketListener*>::iterator i;
 
   for (i = sockets->begin(); i != sockets->end(); i++) {
     if ((*i)->getFd() == fd)
@@ -506,21 +369,6 @@ void XserverDesktop::blockHandler(int* timeout)
         vncSetNotifyFd(fd, screenIndex, true, (*i)->outStream().bufferUsage() > 0);
       }
     }
-    if (httpServer) {
-      httpServer->getSockets(&sockets);
-      for (i = sockets.begin(); i != sockets.end(); i++) {
-        int fd = (*i)->getFd();
-        if ((*i)->isShutdown()) {
-          vlog.debug("http client gone, sock %d",fd);
-          vncRemoveNotifyFd(fd);
-          httpServer->removeSocket(*i);
-          delete (*i);
-        } else {
-          /* Update existing NotifyFD to listen for write (or not) */
-          vncSetNotifyFd(fd, screenIndex, true, (*i)->outStream().bufferUsage() > 0);
-        }
-      }
-    }
 
     // We are responsible for propagating mouse movement between clients
     int cursorX, cursorY;
@@ -534,7 +382,7 @@ void XserverDesktop::blockHandler(int* timeout)
     }
 
     // Trigger timers and check when the next will expire
-    int nextTimeout = server->checkTimeouts();
+    int nextTimeout = Timer::checkTimeouts();
     if (nextTimeout > 0 && (*timeout == -1 || nextTimeout < *timeout))
       *timeout = nextTimeout;
   } catch (rdr::Exception& e) {
@@ -590,6 +438,11 @@ void XserverDesktop::approveConnection(uint32_t opaqueId, bool accept,
 // SDesktop callbacks
 
 
+void XserverDesktop::terminate()
+{
+  kill(getpid(), SIGTERM);
+}
+
 void XserverDesktop::pointerEvent(const Point& pos, int buttonMask)
 {
   vncPointerMove(pos.x + vncGetScreenX(screenIndex),
@@ -597,20 +450,10 @@ void XserverDesktop::pointerEvent(const Point& pos, int buttonMask)
   vncPointerButtonAction(buttonMask);
 }
 
-void XserverDesktop::clientCutText(const char* str, int len)
-{
-  vncClientCutText(str, len);
-}
-
 unsigned int XserverDesktop::setScreenLayout(int fb_width, int fb_height,
                                              const rfb::ScreenSet& layout)
 {
-  int ret;
-  int availableOutputs;
-
-  // RandR support?
-  if (vncRandRGetOutputCount(screenIndex) == 0)
-    return rfb::resultProhibited;
+  unsigned int result;
 
   char buffer[2048];
   vlog.debug("Got request for framebuffer resize to %dx%d",
@@ -618,156 +461,34 @@ unsigned int XserverDesktop::setScreenLayout(int fb_width, int fb_height,
   layout.print(buffer, sizeof(buffer));
   vlog.debug("%s", buffer);
 
-  /*
-   * First check that we don't have any active clone modes. That's just
-   * too messy to deal with.
-   */
-  if (vncRandRHasOutputClones(screenIndex)) {
-    vlog.error("Clone mode active. Refusing to touch screen layout.");
-    return rfb::resultInvalid;
-  }
+  vncSetGlueContext(screenIndex);
+  result = ::setScreenLayout(fb_width, fb_height, layout, &outputIdMap);
 
-  /* Next count how many useful outputs we have... */
-  availableOutputs = vncRandRGetAvailableOutputs(screenIndex);
+  // Explicitly update the server state with the result as there
+  // can be corner cases where we don't get feedback from the X core
+  refreshScreenLayout();
 
-  /* Try to create more outputs if needed... (only works on Xvnc) */
-  if (layout.num_screens() > availableOutputs) {
-    vlog.debug("Insufficient screens. Need to create %d more.",
-               layout.num_screens() - availableOutputs);
-    ret = vncRandRCreateOutputs(screenIndex,
-                                layout.num_screens() - availableOutputs);
-    if (ret < 0) {
-      vlog.error("Unable to create more screens, as needed by the new client layout.");
-      return rfb::resultInvalid;
-    }
-  }
+  return result;
+}
 
-  /* First we might need to resize the screen */
-  if ((fb_width != vncGetScreenWidth(screenIndex)) ||
-      (fb_height != vncGetScreenHeight(screenIndex))) {
-    ret = vncRandRResizeScreen(screenIndex, fb_width, fb_height);
-    if (!ret) {
-      vlog.error("Failed to resize screen to %dx%d", fb_width, fb_height);
-      return rfb::resultInvalid;
-    }
-  }
+void XserverDesktop::handleClipboardRequest()
+{
+  vncHandleClipboardRequest();
+}
 
-  /* Next, reconfigure all known outputs, and turn off the other ones */
-  for (int i = 0;i < vncRandRGetOutputCount(screenIndex);i++) {
-    intptr_t output;
+void XserverDesktop::handleClipboardAnnounce(bool available)
+{
+  vncHandleClipboardAnnounce(available);
+}
 
-    ScreenSet::const_iterator iter;
-
-    output = vncRandRGetOutputId(screenIndex, i);
-
-    /* Known? */
-    if (outputIdMap.count(output) == 0)
-      continue;
-
-    /* Find the corresponding screen... */
-    for (iter = layout.begin();iter != layout.end();++iter) {
-      if (iter->id == outputIdMap[output])
-        break;
-    }
-
-    /* Missing? */
-    if (iter == layout.end()) {
-      /* Disable and move on... */
-      ret = vncRandRDisableOutput(screenIndex, i);
-      if (!ret) {
-        vlog.error("Failed to disable unused output '%s'",
-                   vncRandRGetOutputName(screenIndex, i));
-        return rfb::resultInvalid;
-      }
-      outputIdMap.erase(output);
-      continue;
-    }
-
-    /* Reconfigure new mode and position */
-    ret = vncRandRReconfigureOutput(screenIndex, i,
-                                    iter->dimensions.tl.x,
-                                    iter->dimensions.tl.y,
-                                    iter->dimensions.width(),
-                                    iter->dimensions.height());
-    if (!ret) {
-      vlog.error("Failed to reconfigure output '%s' to %dx%d+%d+%d",
-                 vncRandRGetOutputName(screenIndex, i),
-                 iter->dimensions.width(), iter->dimensions.height(),
-                 iter->dimensions.tl.x, iter->dimensions.tl.y);
-      return rfb::resultInvalid;
-    }
-  }
-
-  /* Finally, allocate new outputs for new screens */
-  ScreenSet::const_iterator iter;
-  for (iter = layout.begin();iter != layout.end();++iter) {
-    OutputIdMap::const_iterator oi;
-    intptr_t output;
-    int i;
-
-    /* Does this screen have an output already? */
-    for (oi = outputIdMap.begin();oi != outputIdMap.end();++oi) {
-      if (oi->second == iter->id)
-        break;
-    }
-
-    if (oi != outputIdMap.end())
-      continue;
-
-    /* Find an unused output */
-    for (i = 0;i < vncRandRGetOutputCount(screenIndex);i++) {
-      output = vncRandRGetOutputId(screenIndex, i);
-
-      /* In use? */
-      if (outputIdMap.count(output) == 1)
-        continue;
-
-      /* Can it be used? */
-      if (!vncRandRIsOutputUsable(screenIndex, i))
-        continue;
-
-      break;
-    }
-
-    /* Shouldn't happen */
-    if (i == vncRandRGetOutputCount(screenIndex))
-        return rfb::resultInvalid;
-
-    /*
-     * Make sure we already have an entry for this, or
-     * computeScreenLayout() will think it is a brand new output and
-     * assign it a random id.
-     */
-    outputIdMap[output] = iter->id;
-
-    /* Reconfigure new mode and position */
-    ret = vncRandRReconfigureOutput(screenIndex, i,
-                                    iter->dimensions.tl.x,
-                                    iter->dimensions.tl.y,
-                                    iter->dimensions.width(),
-                                    iter->dimensions.height());
-    if (!ret) {
-      vlog.error("Failed to reconfigure output '%s' to %dx%d+%d+%d",
-                 vncRandRGetOutputName(screenIndex, i),
-                 iter->dimensions.width(), iter->dimensions.height(),
-                 iter->dimensions.tl.x, iter->dimensions.tl.y);
-      return rfb::resultInvalid;
-    }
-  }
-
-  /*
-   * Update timestamp for when screen layout was last changed.
-   * This is normally done in the X11 request handlers, which is
-   * why we have to deal with it manually here.
-   */
-  vncRandRUpdateSetTime(screenIndex);
-
-  return rfb::resultSuccess;
+void XserverDesktop::handleClipboardData(const char* data_)
+{
+  vncHandleClipboardData(data_);
 }
 
 void XserverDesktop::grabRegion(const rfb::Region& region)
 {
-  if (directFbptr)
+  if (shadowFramebuffer == NULL)
     return;
 
   std::vector<rfb::Rect> rects;

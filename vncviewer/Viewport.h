@@ -1,5 +1,5 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
- * Copyright 2011 Pierre Ossman <ossman@cendio.se> for Cendio AB
+ * Copyright 2011-2019 Pierre Ossman <ossman@cendio.se> for Cendio AB
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +22,11 @@
 
 #include <map>
 
+#include <rfb/Rect.h>
+
 #include <FL/Fl_Widget.H>
+
+#include "EmulateMB.h"
 
 class Fl_Menu_Button;
 class Fl_RGB_Image;
@@ -31,7 +35,7 @@ class CConn;
 class PlatformPixelBuffer;
 class Surface;
 
-class Viewport : public Fl_Widget {
+class Viewport : public Fl_Widget, public EmulateMB {
 public:
 
   Viewport(int w, int h, const rfb::PixelFormat& serverPF, CConn* cc_);
@@ -49,10 +53,13 @@ public:
 
   // Change client LED state
   void setLEDState(unsigned int state);
-  // Change server LED state
-  void pushLEDState();
 
   void draw(Surface* dst);
+
+  // Clipboard events
+  void handleClipboardRequest();
+  void handleClipboardAnnounce(bool available);
+  void handleClipboardData(const char* data);
 
   // Fl_Widget callback methods
 
@@ -62,11 +69,17 @@ public:
 
   int handle(int event);
 
+protected:
+  virtual void sendPointerEvent(const rfb::Point& pos, int buttonMask);
+
 private:
+  bool hasFocus();
 
   unsigned int getModifierMask(unsigned int keysym);
 
   static void handleClipboardChange(int source, void *data);
+
+  void flushPendingClipboard();
 
   void handlePointerEvent(const rfb::Point& pos, int buttonMask);
   static void handlePointerTimeout(void *data);
@@ -75,6 +88,12 @@ private:
   void handleKeyRelease(int keyCode);
 
   static int handleSystemEvent(void *event, void *data);
+
+#ifdef WIN32
+  static void handleAltGrTimeout(void *data);
+#endif
+
+  void pushLEDState();
 
   void initContextMenu();
   void popupContextMenu();
@@ -93,6 +112,18 @@ private:
 
   typedef std::map<int, rdr::U32> DownMap;
   DownMap downKeySym;
+
+#ifdef WIN32
+  bool altGrArmed;
+  unsigned int altGrCtrlTime;
+#endif
+
+  bool firstLEDState;
+
+  bool pendingServerClipboard;
+  bool pendingClientClipboard;
+
+  int clipboardSource;
 
   rdr::U32 menuKeySym;
   int menuKeyCode, menuKeyFLTK;

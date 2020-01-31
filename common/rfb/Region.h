@@ -52,7 +52,6 @@ namespace rfb {
     void setOrderedRects(const std::vector<Rect>& rects);
     void setExtentsAndOrderedRects(const ShortRect* extents, int nRects,
                                    const ShortRect* rects);
-    void copyFrom(const Region& r);
 
     void assign_intersect(const Region& r);
     void assign_union(const Region& r);
@@ -69,7 +68,7 @@ namespace rfb {
     bool is_empty() const { return numRects() == 0; }
 
     bool get_rects(std::vector<Rect>* rects, bool left2right=true,
-                   bool topdown=true, int maxArea=0) const;
+                   bool topdown=true) const;
     Rect get_bounding_rect() const;
 
     void debug_print(const char *prefix) const;

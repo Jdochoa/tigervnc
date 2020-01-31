@@ -66,6 +66,15 @@ Use IPv4 for incoming and outgoing connections. Default is on.
 Use IPv6 for incoming and outgoing connections. Default is on.
 .
 .TP
+.B \-rfbunixpath \fIpath\fP
+Specifies the path of a Unix domain socket on which x0vncserver listens for
+connections from viewers, instead of listening on a TCP port.
+.
+.TP
+.B \-rfbunixmode \fImode\fP
+Specifies the mode of the Unix domain socket.  The default is 0600.
+.
+.TP
 .B \-Log \fIlogname\fP:\fIdest\fP:\fIlevel\fP
 Configures the debug log settings.  \fIdest\fP can currently be \fBstderr\fP,
 \fBstdout\fP or \fBsyslog\fP, and \fIlevel\fP is between 0 and 100, 100 meaning
@@ -133,6 +142,11 @@ GnuTLS priority string that controls the TLS session’s handshake algorithms.
 See the GnuTLS manual for possible values. Default is \fBNORMAL\fP.
 .
 .TP
+.B \-UseBlacklist
+Temporarily reject connections from a host if it repeatedly fails to
+authenticate. Default is on.
+.
+.TP
 .B \-BlacklistThreshold \fIcount\fP
 The number of unauthenticated connection attempts allowed from any individual
 host before that host is black-listed.  Default is 5.
@@ -151,6 +165,11 @@ connections. Default is off.
 .B \-QueryConnectTimeout \fIseconds\fP
 Number of seconds to show the Accept Connection dialog before rejecting the
 connection.  Default is \fB10\fP.
+.
+.TP
+.B \-localhost
+Only allow connections from the same machine. Useful if you use SSH and want to
+stop non-SSH connections from any other hosts.
 .
 .TP
 .B \-AlwaysShared
@@ -176,6 +195,10 @@ Accept key press and release events from clients. Default is on.
 .TP
 .B \-AcceptPointerEvents
 Accept pointer press and release events from clients. Default is on.
+.
+.TP
+.B \-AcceptSetDesktopSize
+Accept requests to resize the size of the desktop. Default is on.
 .
 .TP
 .B \-RemapKeys \fImapping
@@ -293,7 +316,7 @@ Currently unused.
 .BR Xvnc (1),
 .BR vncpasswd (1),
 .br
-http://www.tigervnc.org/
+https://www.tigervnc.org/
 
 .SH AUTHOR
 Constantin Kaplinsky and others.

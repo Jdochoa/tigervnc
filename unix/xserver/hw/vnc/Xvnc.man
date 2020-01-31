@@ -91,24 +91,20 @@ Use IPv4 for incoming and outgoing connections. Default is on.
 Use IPv6 for incoming and outgoing connections. Default is on.
 .
 .TP
+.B \-rfbunixpath \fIpath\fP
+Specifies the path of a Unix domain socket on which Xvnc listens for
+connections from viewers, instead of listening on a TCP port.
+.
+.TP
+.B \-rfbunixmode \fImode\fP
+Specifies the mode of the Unix domain socket.  The default is 0600.
+.
+.TP
 .B \-rfbwait \fItime\fP, \-ClientWaitTimeMillis \fItime\fP
 Time in milliseconds to wait for a viewer which is blocking the server. This is
 necessary because the server is single-threaded and sometimes blocks until the
 viewer has finished sending or receiving a message - note that this does not
 mean an update will be aborted after this time.  Default is 20000 (20 seconds).
-.
-.TP
-.B \-httpd \fIdirectory\fP
-Run a mini-HTTP server which serves files from the given directory.  Normally
-the directory will contain the classes for the Java viewer.  In addition, files
-with a .vnc extension will have certain substitutions made so that a single
-installation of the Java VNC viewer can be served by separate instances of
-Xvnc.
-.
-.TP
-.B \-httpPort \fIport\fP
-Specifies the port on which the mini-HTTP server runs.  Default is 5800 plus
-the display number.
 .
 .TP
 .B \-rfbauth \fIpasswd-file\fP, \-PasswordFile \fIpasswd-file\fP
@@ -233,6 +229,11 @@ also be in PEM format.
 .B \-GnuTLSPriority \fIpriority\fP
 GnuTLS priority string that controls the TLS session’s handshake algorithms.
 See the GnuTLS manual for possible values. Default is \fBNORMAL\fP.
+.
+.TP
+.B \-UseBlacklist
+Temporarily reject connections from a host if it repeatedly fails to
+authenticate. Default is on.
 .
 .TP
 .B \-BlacklistThreshold \fIcount\fP
@@ -387,7 +388,7 @@ created automatically the next time he connects.
 .BR Xserver (1),
 .BR inetd (1)
 .br
-http://www.tigervnc.org
+https://www.tigervnc.org
 
 .SH AUTHOR
 Tristan Richardson, RealVNC Ltd. and others.

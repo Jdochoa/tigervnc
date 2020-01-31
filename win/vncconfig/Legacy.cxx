@@ -127,7 +127,7 @@ void LegacyPage::LoadPrefs()
 
               // Finally, save the Hosts value
               regKey.setString(_T("Hosts"), TStr(newHosts.buf));
-            } catch (rdr::Exception) {
+            } catch (rdr::Exception&) {
               MsgBox(0, _T("Unable to convert AuthHosts setting to Hosts format."),
                      MB_ICONWARNING | MB_OK);
             }
@@ -148,7 +148,7 @@ void LegacyPage::LoadPrefs()
           regKey.setBool(_T("AlwaysShared"), connectPriority == 1);
           regKey.setBool(_T("NeverShared"), connectPriority == 2);
 
-        } catch(rdr::Exception) {
+        } catch(rdr::Exception&) {
         }
 
         // Open the local, default-user settings
@@ -192,10 +192,6 @@ void LegacyPage::LoadPrefs()
 
       void LegacyPage::LoadUserPrefs(const RegKey& key)
       {
-        if (key.getBool(_T("HTTPConnect"), true))
-          regKey.setInt(_T("HTTPPortNumber"), key.getInt(_T("PortNumber"), 5900)-100);
-        else
-          regKey.setInt(_T("HTTPPortNumber"), 0);
         regKey.setInt(_T("PortNumber"), key.getBool(_T("SocketConnect")) ? key.getInt(_T("PortNumber"), 5900) : 0);
         if (key.getBool(_T("AutoPortSelect"), false)) {
           MsgBox(0, _T("The AutoPortSelect setting is not supported by this release.")

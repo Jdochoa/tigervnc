@@ -67,18 +67,28 @@ static char* getpassword(const char* prompt) {
   return 0;
 }
 
-// Reads password from stdin and prints encrypted password to stdout.
+// Reads passwords from stdin and prints encrypted passwords to stdout.
 static int encrypt_pipe() {
-  char *result = getpassword(NULL);
-  if (result) {
+  int i;
+
+  // We support a maximum of two passwords right now
+  for (i = 0;i < 2;i++) {
+    char *result = getpassword(NULL);
+    if (!result)
+      break;
+
     ObfuscatedPasswd obfuscated(result);
     if (fwrite(obfuscated.buf, obfuscated.length, 1, stdout) != 1) {
       fprintf(stderr,"Writing to stdout failed\n");
       return 1;
     }
-    return 0;
   }
-  else return 1;
+
+  // Did we fail to produce even one password?
+  if (i == 0)
+    return 1;
+
+  return 0;
 }
 
 static ObfuscatedPasswd* readpassword() {
@@ -124,7 +134,7 @@ int main(int argc, char** argv)
     } else if (argv[i][0] == '-') {
       usage();
     } else if (!fname) {
-      fname = argv[i];
+      fname = strDup(argv[i]);
     } else {
       usage();
     }
@@ -155,23 +165,36 @@ int main(int argc, char** argv)
     FILE* fp = fopen(fname,"w");
     if (!fp) {
       fprintf(stderr,"Couldn't open %s for writing\n",fname);
+      delete [] fname;
+      delete obfuscated;
+      delete obfuscatedReadOnly;
       exit(1);
     }
     chmod(fname, S_IRUSR|S_IWUSR);
 
     if (fwrite(obfuscated->buf, obfuscated->length, 1, fp) != 1) {
       fprintf(stderr,"Writing to %s failed\n",fname);
+      delete [] fname;
+      delete obfuscated;
+      delete obfuscatedReadOnly;
       exit(1);
     }
+
+    delete obfuscated;
 
     if (obfuscatedReadOnly) {
       if (fwrite(obfuscatedReadOnly->buf, obfuscatedReadOnly->length, 1, fp) != 1) {
         fprintf(stderr,"Writing to %s failed\n",fname);
+        delete [] fname;
+        delete obfuscatedReadOnly;
         exit(1);
       }
     }
 
     fclose(fp);
+
+    delete [] fname;
+    delete obfuscatedReadOnly;
 
     return 0;
   }
